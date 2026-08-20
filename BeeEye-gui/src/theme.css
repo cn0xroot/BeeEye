@@ -1,0 +1,431 @@
+/* 蜂眼 BeeEye — analyzer visual system.
+ *
+ * The base colours are the same stops the CUDA kernel renders the traffic
+ * field with (cuda/BeeEye_render.cu → render.PaletteCSS). Deriving the chrome
+ * from the field's own palette is what keeps the panel from looking pasted on
+ * top of a differently-coloured application. */
+
+:root {
+  /* palette stops, shared with the renderer */
+  --stop-0: #080e1c;  /* deep navy   */
+  --stop-1: #104078;  /* blue        */
+  --stop-2: #22bedc;  /* cyan        */
+  --stop-3: #966ef5;  /* violet      */
+  --stop-4: #ff78be;  /* hot pink    */
+
+  --bg:            #070c17;
+  --bg-panel:      #0b1220;
+  --bg-panel-2:    #101a2e;
+  --bg-raised:     #16243c;
+  --bg-hover:      #1b2c48;
+  --bg-selected:   #1d3a63;
+
+  --border:        rgba(34, 190, 220, 0.16);
+  --border-strong: rgba(34, 190, 220, 0.38);
+
+  --text:          #e8f1ff;
+  --text-dim:      #9fb2cc;
+  --text-faint:    #64789a;
+
+  --accent:        var(--stop-2);
+  --accent-2:      var(--stop-3);
+  --accent-3:      var(--stop-4);
+
+  --good:    #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --danger:  #d03b3b;
+
+  /* Protocol identity colours. Fixed slot order, never cycled — a protocol
+   * keeps its colour no matter which others are on screen. Validated for
+   * colour-vision deficiency against this surface; the protocol name is always
+   * shown as text beside the swatch, so colour never carries identity alone. */
+  --proto-tls:   #2e9dff;
+  --proto-http:  #ff6a1f;
+  --proto-dns:   #00d992;
+  --proto-mqtt:  #ffc31a;
+  --proto-arp:   #ff4d9d;
+  --proto-icmp:  #5ef04a;
+  --proto-tcp:   #ab72ff;
+  --proto-other: #ff5252;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+
+  --radius: 8px;
+  --shadow-glow: 0 0 0 1px var(--border), 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(16, 64, 120, 0.35), transparent 60%),
+    radial-gradient(900px 500px at 95% 0%, rgba(150, 110, 245, 0.18), transparent 55%),
+    var(--bg);
+  color: var(--text);
+  font-family: var(--ui-font, var(--sans));
+  font-size: 13px;
+  zoom: var(--ui-zoom, 1);
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+::selection { background: rgba(34, 190, 220, 0.3); }
+
+/* Scrollbars styled to match; the default light ones cut holes in a dark UI. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(34, 190, 220, 0.18);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(34, 190, 220, 0.34); background-clip: padding-box; }
+
+/* ---------------------------------------------------------- light appearance
+ *
+ * The analyzer defaults to dark — it is a long-session tool, usually on a
+ * second screen. Light is a first-class alternative, not a wash of the dark
+ * theme: the chart-series and layer-role hues are re-picked for a light
+ * surface rather than reused, because colours validated against #0b1220 do not
+ * hold their separation against white. */
+
+:root[data-appearance='light'] {
+  color-scheme: light;
+
+  /* Paper beige, the same ground the overview UI's light theme uses, taken
+   * from ai.paper-insight.com's sepia palette. The analyzer is a long-session
+   * tool; a warm ground is easier to sit in front of than a blue-white one. */
+
+  --bg:            #f9f3e5;
+  --bg-panel:      #fdf9ee;
+  --bg-panel-2:    #f4ecd9;
+  --bg-raised:     #f1e7d3;
+  --bg-hover:      #ece0c8;
+  --bg-selected:   #e4d4b2;
+
+  --border:        rgba(120, 92, 44, 0.22);
+  --border-strong: rgba(120, 92, 44, 0.48);
+
+  --text:          #423a2c;
+  --text-dim:      #6b5f4a;
+  --text-faint:    #786c56;
+
+  --accent:        #b45309;
+  --accent-2:      #6b3fa8;
+  --accent-3:      #b4256e;
+
+  --proto-tls:   #2a78d6;
+  --proto-http:  #c9521c;
+  --proto-dns:   #12805a;
+  --proto-mqtt:  #9a6a00;
+  --proto-arp:   #c14b7c;
+  --proto-icmp:  #006b00;
+  --proto-tcp:   #4a3aa7;
+  --proto-other: #c1332f;
+
+  --role-link:      #786c56;
+  --role-net:       #2a78d6;
+  --role-transport: #12805a;
+  --role-app:       #c9521c;
+
+  --shadow-glow: 0 0 0 1px var(--border), 0 6px 20px rgba(67, 53, 30, 0.10);
+}
+
+:root[data-appearance='light'] body {
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(180, 83, 9, 0.10), transparent 60%),
+    radial-gradient(900px 500px at 95% 0%, rgba(146, 64, 14, 0.07), transparent 55%),
+    var(--bg);
+}
+
+:root[data-appearance='light'] .packet-table thead th { background: #f2e8d4; }
+:root[data-appearance='light'] .brand-name {
+  background: linear-gradient(90deg, #b45309, #6b3fa8 60%, #b4256e);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+:root[data-appearance='light'] .hex .hl {
+  background: #7a4a12;
+  color: #fffdf7;
+}
+:root[data-appearance='light'] ::-webkit-scrollbar-thumb {
+  background: rgba(120, 92, 44, 0.26);
+  background-clip: padding-box;
+}
+
+/* ------------------------------------------------------------ preset menu */
+
+.preset { position: relative; }
+.preset-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: min(520px, 88vw);
+  max-height: 62vh;
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-glow);
+  padding: 8px;
+}
+.preset-hint { color: var(--text-faint); font-size: 11px; padding: 4px 8px 8px; }
+.preset-group { margin-bottom: 6px; }
+.preset-group-title {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 6px 8px 3px;
+  border-top: 1px solid var(--border);
+}
+.preset-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.preset-item:hover { background: var(--bg-hover); }
+.preset-label { flex: none; }
+.preset-expr {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  margin-left: auto;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------- toggle buttons */
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  border-radius: 999px;
+  padding: 4px 11px;
+  cursor: pointer;
+  color: var(--text-dim);
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.toggle:hover { border-color: var(--border-strong); }
+.toggle[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+}
+.toggle .led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.toggle[aria-pressed='true'] .led {
+  background: var(--good);
+  box-shadow: 0 0 6px var(--good);
+}
+
+.appearance-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-raised);
+}
+.appearance-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  padding: 5px 11px;
+  cursor: pointer;
+  color: var(--text-faint);
+  transition: background 130ms, color 130ms;
+}
+.appearance-switch button:hover { color: var(--text); }
+.appearance-switch button.active { background: var(--accent); color: var(--bg); }
+
+/* -------------------------------------------------------------- process */
+
+.c-proc { width: 150px; }
+.proc-name { color: var(--accent-2); }
+.proc-pid { color: var(--text-faint); }
+.proc-none { color: var(--text-faint); }
+
+.proc-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent-2) 10%, transparent);
+}
+.proc-strip b { color: var(--accent-2); margin-right: 5px; }
+
+/* ── Midnight Neon (analyzer) ───────────────────────────────────────────────
+ * Punchier than the default dark: deeper ink ground, electric cyan accent with
+ * a magenta counter, neon protocol hues. */
+:root[data-appearance='midnight-neon'] {
+  color-scheme: dark;
+  --stop-0: #05070f;
+  --stop-1: #123a86;
+  --stop-2: #22e0ff;
+  --stop-3: #b98cff;
+  --stop-4: #ff5db1;
+
+  --bg:            #05070f;
+  --bg-panel:      #0a0f20;
+  --bg-panel-2:    #10162e;
+  --bg-raised:     #161d3a;
+  --bg-hover:      #1b2547;
+  --bg-selected:   #1f2f63;
+
+  --border:        rgba(34, 224, 255, 0.16);
+  --border-strong: rgba(34, 224, 255, 0.40);
+
+  --text:          #e8f0ff;
+  --text-dim:      #9fb2e6;
+  --text-faint:    #6b7cb5;
+
+  --accent:        #22e0ff;
+  --accent-2:      #b98cff;
+  --accent-3:      #ff5db1;
+
+  --good:    #2fffb0;
+  --warning: #ffd23f;
+  --serious: #ff9d4d;
+  --danger:  #ff4d80;
+
+  --proto-tls:   #2ea8ff;
+  --proto-http:  #ff6a3d;
+  --proto-dns:   #00e5a0;
+  --proto-mqtt:  #ffcf33;
+  --proto-arp:   #ff5db1;
+  --proto-icmp:  #7cff5e;
+  --proto-tcp:   #b98cff;
+  --proto-other: #ff5470;
+
+  --shadow-glow: 0 0 0 1px var(--border), 0 10px 40px rgba(10, 20, 60, 0.6);
+}
+
+/* ── Matrix (analyzer) ──────────────────────────────────────────────────────
+ * Phosphor green on black. Status colours keep their meaning. */
+:root[data-appearance='matrix'] {
+  color-scheme: dark;
+  --stop-0: #000700;
+  --stop-1: #0c3a0b;
+  --stop-2: #35ff45;
+  --stop-3: #7cff9e;
+  --stop-4: #d4ff3f;
+
+  --bg:            #000700;
+  --bg-panel:      #041604;
+  --bg-panel-2:    #082108;
+  --bg-raised:     #0c2e0b;
+  --bg-hover:      #10420f;
+  --bg-selected:   #12581033;
+
+  --border:        rgba(53, 255, 69, 0.18);
+  --border-strong: rgba(53, 255, 69, 0.42);
+
+  --text:          #b6ffb0;
+  --text-dim:      #56d84f;
+  --text-faint:    #2f8f2c;
+
+  --accent:        #35ff45;
+  --accent-2:      #7cff9e;
+  --accent-3:      #d4ff3f;
+
+  --good:    #35ff45;
+  --warning: #d4ff3f;
+  --serious: #ff9d3d;
+  --danger:  #ff5252;
+
+  --proto-tls:   #35ff45;
+  --proto-http:  #b6ff3f;
+  --proto-dns:   #3fffd2;
+  --proto-mqtt:  #d4ff3f;
+  --proto-arp:   #7cff9e;
+  --proto-icmp:  #4dff4d;
+  --proto-tcp:   #a0ff6e;
+  --proto-other: #ff8f6e;
+
+  --shadow-glow: 0 0 0 1px var(--border), 0 8px 30px rgba(0, 40, 0, 0.55);
+}
+
+/* ── Appearance settings menu (analyzer) ───────────────────────────── */
+.settings { position: relative; display: inline-flex; }
+.settings-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 26px;
+  background: var(--bg-raised); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-dim); cursor: pointer;
+}
+.settings-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.settings-menu {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 60;
+  width: 320px; max-width: 90vw;
+  background: var(--bg-panel); border: 1px solid var(--border-strong);
+  border-radius: 10px; box-shadow: var(--shadow-glow); padding: 12px;
+}
+.settings-group + .settings-group { margin-top: 12px; }
+.settings-label {
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-faint); margin-bottom: 6px;
+}
+.theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.theme-swatch {
+  position: relative; display: flex; align-items: flex-end;
+  height: 44px; padding: 4px; border-radius: 7px; cursor: pointer;
+  border: 1.5px solid var(--border); overflow: hidden; background: var(--sw-bg);
+}
+.theme-swatch.active { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
+.theme-swatch .sw-a, .theme-swatch .sw-b, .theme-swatch .sw-c {
+  position: absolute; top: 5px; width: 20%; height: 11px; border-radius: 3px;
+}
+.theme-swatch .sw-a { left: 6px; background: var(--sw-1); }
+.theme-swatch .sw-b { left: 30%; background: var(--sw-2); }
+.theme-swatch .sw-c { left: 54%; background: var(--sw-3); }
+.theme-swatch .sw-name { position: relative; z-index: 1; font-size: 10px; font-weight: 600; color: var(--sw-fg); }
+.theme-swatch[data-appearance-preview='system']        { --sw-bg:#0b1220; --sw-fg:#e8f1ff; --sw-1:#22bedc; --sw-2:#d95926; --sw-3:#199e70; }
+.theme-swatch[data-appearance-preview='dark']          { --sw-bg:#0b1220; --sw-fg:#e8f1ff; --sw-1:#22bedc; --sw-2:#966ef5; --sw-3:#ff78be; }
+.theme-swatch[data-appearance-preview='light']         { --sw-bg:#f9f3e5; --sw-fg:#423a2c; --sw-1:#b45309; --sw-2:#2a78d6; --sw-3:#12805a; }
+.theme-swatch[data-appearance-preview='midnight-neon'] { --sw-bg:#05070f; --sw-fg:#e8f0ff; --sw-1:#22e0ff; --sw-2:#ff5db1; --sw-3:#7cff5e; }
+.theme-swatch[data-appearance-preview='matrix']        { --sw-bg:#000700; --sw-fg:#b6ffb0; --sw-1:#35ff45; --sw-2:#d4ff3f; --sw-3:#3fffd2; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; width: 100%; }
+.seg button {
+  flex: 1; background: transparent; border: 0; border-right: 1px solid var(--border);
+  padding: 6px 4px; cursor: pointer; color: var(--text-dim); font-size: 12px;
+}
+.seg button:last-child { border-right: 0; }
+.seg button.active { background: var(--accent); color: var(--bg); font-weight: 600; }

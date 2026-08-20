@@ -1,0 +1,43 @@
+{
+  "columns": {
+    "mac": "MAC 地址",
+    "ip": "IP 地址",
+    "vendor": "厂商",
+    "model": "推测型号",
+    "category": "类别",
+    "hostname": "主机名",
+    "iface": "接口",
+    "accessType": "接入方式",
+    "firstSeen": "首次发现",
+    "lastSeen": "最后活动",
+    "traffic": "流量",
+    "status": "状态"
+  },
+  "category": {
+    "unknown": "未知",
+    "camera": "摄像头",
+    "lock": "门锁",
+    "nas": "NAS",
+    "router": "路由器",
+    "tv": "电视",
+    "phone": "手机",
+    "laptop": "电脑",
+    "fridge": "冰箱",
+    "speaker": "智能音箱"
+  },
+  "access": { "wireless": "无线", "wired": "有线" },
+  "sensitivity": {
+    "3": "高 — 全量记录连接事件",
+    "2": "中",
+    "1": "低 — 仅基础统计"
+  },
+  "isNew": "新设备",
+  "isNewHelp": "该 MAC 尚未被管理员确认。",
+  "setCategory": "重新归类",
+  "detail": {
+    "title": "设备详情",
+    "connections": "通信记录",
+    "domains": "查询过的域名",
+    "countries": "目标国家/地区"
+  }
+}

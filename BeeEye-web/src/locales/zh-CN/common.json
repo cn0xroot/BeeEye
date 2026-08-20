@@ -1,0 +1,214 @@
+{
+  "app": {
+    "title": "蜂眼 BeeEye",
+    "subtitle": "家用 IoT 网关流量分析"
+  },
+  "nav": {
+    "overview": "总览",
+    "devices": "设备",
+    "connections": "通信记录",
+    "byIp": "按 IP",
+    "byProtocol": "按协议",
+    "dns": "DNS",
+    "alerts": "告警",
+    "analysis": "抓包分析"
+  },
+  "settings": {
+    "language": "语言",
+    "theme": "主题",
+    "themes": {
+      "system": "跟随系统",
+      "light": "米黄纸感",
+      "dark": "深邃黑",
+      "tech-blue": "科技蓝",
+      "warm-amber": "暖橙护眼",
+      "forest-green": "森绿静谧",
+      "high-contrast": "高对比无障碍",
+      "midnight-neon": "午夜霓虹",
+      "matrix": "矩阵绿"
+    },
+    "font": "字体",
+    "size": "字号",
+    "fonts": {
+      "system": "系统",
+      "mono": "科技等宽",
+      "rounded": "圆润",
+      "serif": "衬线"
+    },
+    "sizes": {
+      "s": "小",
+      "m": "中",
+      "l": "大",
+      "xl": "特大"
+    },
+    "title": "外观"
+  },
+  "summary": {
+    "devices": "设备数",
+    "newDevices": "待确认",
+    "connections": "连接数",
+    "internalFlows": "东西向",
+    "traffic": "流量",
+    "alerts": "告警数",
+    "highSeverity": "高危",
+    "trend": "流量趋势",
+    "byCategory": "按设备类别",
+    "topTalkers": "流量排行",
+    "protocolShare": "协议占比",
+    "geoDistribution": "目标国家/地区分布"
+  },
+  "filters": {
+    "title": "筛选",
+    "device": "设备",
+    "ipOrDomain": "IP 或域名",
+    "protocol": "协议",
+    "portRange": "端口范围",
+    "timeRange": "时间范围",
+    "internalOnly": "仅东西向",
+    "apply": "应用",
+    "reset": "重置",
+    "all": "全部",
+    "from": "起",
+    "to": "止",
+    "export": "导出",
+    "exportCsv": "CSV",
+    "exportJson": "JSON",
+    "ranges": {
+      "1h": "最近 1 小时",
+      "6h": "最近 6 小时",
+      "24h": "最近 24 小时",
+      "7d": "最近 7 天",
+      "all": "全部时间"
+    }
+  },
+  "table": {
+    "empty": "没有匹配的记录",
+    "emptyHelp": "放宽筛选条件,或等待流量产生。",
+    "loading": "加载中…",
+    "rows": "{{count}} 条",
+    "showing": "显示 {{shown}} / {{total}} 条"
+  },
+  "units": {
+    "bytes": "字节",
+    "packets": "包",
+    "connections": "连接"
+  },
+  "common": {
+    "unknown": "未知",
+    "local": "本地 / 内网",
+    "noDnsRecord": "无 DNS 解析记录",
+    "encryptedDns": "加密 DNS — 查询内容不可见",
+    "yes": "是",
+    "no": "否",
+    "acknowledge": "确认",
+    "acknowledged": "已确认",
+    "error": "数据加载失败",
+    "retry": "重试"
+  },
+  "chart": {
+    "time": "时间",
+    "bytes": "字节",
+    "noData": "该时间范围内无数据",
+    "other": "其他"
+  },
+  "analysis": {
+    "title": "抓包分析",
+    "upload": "分析抓包文件",
+    "uploadHint": "把 .pcap 文件拖到这里,或点击选择。文件仅在内存中分析,不会落盘。",
+    "uploading": "分析中…",
+    "recent": "最近的分析",
+    "noReports": "暂无分析记录",
+    "openReport": "打开",
+    "warnings": "本次分析的局限",
+    "tabs": {
+      "summary": "概要",
+      "protocols": "协议",
+      "talkers": "通信主机",
+      "conversations": "会话对",
+      "sessions": "会话内容",
+      "credentials": "明文凭据",
+      "files": "传输文件",
+      "findings": "安全发现",
+      "geo": "地理分布"
+    },
+    "summary": {
+      "packets": "数据包",
+      "bytes": "字节数",
+      "duration": "时长",
+      "linkType": "链路类型",
+      "uniqueIps": "独立 IP",
+      "uniqueMacs": "独立 MAC",
+      "first": "首包时间",
+      "last": "末包时间",
+      "snaplen": "抓包长度上限"
+    },
+    "talkers": {
+      "ip": "IP",
+      "packets": "数据包",
+      "bytes": "字节数",
+      "sent": "发出",
+      "received": "收到",
+      "location": "地理位置"
+    },
+    "conv": {
+      "a": "端点 A",
+      "b": "端点 B",
+      "proto": "传输层",
+      "app": "应用层",
+      "packets": "数据包",
+      "bytes": "字节数",
+      "duration": "时长"
+    },
+    "sessions": {
+      "client": "客户端",
+      "server": "服务端",
+      "app": "应用层",
+      "bytes": "字节数",
+      "request": "客户端 → 服务端",
+      "response": "服务端 → 客户端",
+      "authFailures": "认证失败次数"
+    },
+    "creds": {
+      "protocol": "协议",
+      "method": "方式",
+      "client": "客户端",
+      "server": "服务端",
+      "username": "用户名",
+      "password": "密码",
+      "evidence": "原始证据",
+      "none": "未发现明文凭据",
+      "noneHelp": "要么没有明文认证过程,要么所用协议本身是加密的。",
+      "warning": "这些凭据以明文经过网络。任何能看到这段流量的人都能读到它们。请视为已泄露并立即更换。"
+    },
+    "files": {
+      "filename": "文件名",
+      "type": "内容类型",
+      "size": "大小",
+      "hash": "SHA-256",
+      "download": "下载",
+      "none": "未还原出文件",
+      "warningTitle": "还原出的文件可能是恶意的",
+      "warning": "这些字节是从抓包流量中切出来的。下载一律以不透明附件方式提供、绝不在浏览器内渲染 —— 请当作不可信内容处理。"
+    },
+    "findings": {
+      "kind": "类型",
+      "severity": "等级",
+      "client": "来源",
+      "server": "目标",
+      "evidence": "证据",
+      "none": "没有安全发现",
+      "noneHelp": "本次抓包中没有内容命中攻击特征或暴力破解判定。",
+      "heuristic": "启发式判断 —— 命中特征,并不等于攻击已成功"
+    },
+    "geo": {
+      "none": "没有可定位的外部目标",
+      "country": "国家/地区",
+      "city": "城市",
+      "bytes": "字节数"
+    }
+  },
+  "source": {
+    "live": "● 实时 · {{iface}}",
+    "simulated": "⚠ 模拟数据"
+  }
+}

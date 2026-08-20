@@ -1,0 +1,56 @@
+# 蜂眼 BeeEye — local / gateway deployment (program.md §3.7).
+#
+# Prerequisite: run `make bpf` on the host first. The eBPF object must be built
+# against the running kernel's BTF, which is not reachable from a build stage.
+#
+# The two UIs are separate services with no depends_on between them (F42):
+# restarting or losing either one leaves the other serving.
+
+services:
+  BeeEye-agent:                 # storage + detection + REST + the overview UI
+    build: ./BeeEye-agent
+    command: ["/usr/local/bin/BeeEye-agent", "-config", "/app/config/config.yaml"]
+    network_mode: host          # required: attaches eBPF to the host's real NICs
+    cap_add:
+      - CAP_BPF                 # kernel 5.8+; narrower than CAP_SYS_ADMIN
+      - CAP_NET_ADMIN           # TCX attach
+      - CAP_PERFMON
+    volumes:
+      - /sys/kernel/debug:/sys/kernel/debug
+      - /sys/fs/bpf:/sys/fs/bpf
+      - ./config:/app/config:ro
+      - ./data:/app/data
+      - ./BeeEye-web/dist:/app/BeeEye-web/dist:ro
+    restart: unless-stopped
+
+  BeeEye-gui:                   # live capture analyzer (F40)
+    build: ./BeeEye-agent       # same module, second binary
+    command: ["/usr/local/bin/BeeEye-gui", "-listen", ":8081", "-web", "/app/web"]
+    network_mode: host          # required: AF_PACKET needs the real NICs
+    cap_add:
+      - CAP_NET_RAW             # least privilege for capture; CAP_BPF not needed
+      - CAP_NET_ADMIN           # promiscuous mode
+    volumes:
+      - ./BeeEye-gui/dist:/app/web:ro
+    restart: unless-stopped
+    # Deliberately no depends_on: the analyzer neither reads the agent's
+    # database nor calls its API, so coupling their lifecycles would only
+    # create a shared failure this design exists to avoid.
+
+  # Optional metrics stack. Both are commented out by default — the system is
+  # fully usable without them, and an unconfigured InfluxDB is one more thing
+  # to secure on a home network.
+  #
+  # BeeEye-influxdb:
+  #   image: influxdb:2
+  #   volumes: [influx-data:/var/lib/influxdb2]
+  #   restart: unless-stopped
+  #
+  # BeeEye-grafana:
+  #   image: grafana/grafana
+  #   ports: ["3000:3000"]
+  #   depends_on: [BeeEye-influxdb]
+  #   restart: unless-stopped
+
+# volumes:
+#   influx-data:
