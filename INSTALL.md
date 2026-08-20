@@ -2,7 +2,8 @@
 
 > A complete, from-scratch guide for **a brand-new, clean Linux machine** — from
 > system dependencies to a running stack.
-> 中文：[INSTALL.zh-CN.md](INSTALL.zh-CN.md) · Usage: [USAGE.md](USAGE.md) · Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
+> Website: https://www.beeeye.dev/
+> 中文：[INSTALL.zh-CN.md](INSTALL.zh-CN.md) · Usage: [USAGE.en.md](USAGE.en.md) · Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
 
 **Last updated**: 2026-08-19
 

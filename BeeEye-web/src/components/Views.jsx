@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, formatBytes } from '../api'
 import { Table, SeverityTag, CategoryTag, GeoCell, Bytes, When } from './Tables'
+import GeoAccuracyBadge from './GeoAccuracyBadge'
 import { BarRows } from './Charts'
 
 /* ------------------------------------------------------------------ devices */
@@ -132,7 +133,7 @@ export function IPView({ rows, devices }) {
   return (
     <div className="view">
       <section className="card wide">
-        <h2>{t('nav.byIp')}</h2>
+        <h2>{t('nav.byIp')} <GeoAccuracyBadge /></h2>
         <Table
           columns={columns}
           rows={rows}
@@ -275,6 +276,7 @@ export function AlertsView({ events, devices, weights, onChanged }) {
     { key: 'ts', label: ta('columns.time') },
     { key: 'device', label: ta('columns.device') },
     { key: 'type', label: ta('columns.type') },
+    { key: 'target', label: ta('columns.target') },
     { key: 'sev', label: ta('columns.severity') },
     { key: 'score', label: ta('columns.score') },
     { key: 'signals', label: ta('columns.signals') },
@@ -308,6 +310,14 @@ export function AlertsView({ events, devices, weights, onChanged }) {
                 <td><When value={e.ts} /></td>
                 <td>{name(e.mac)}</td>
                 <td>{ta(`eventType.${e.event_type}`, { defaultValue: e.event_type })}</td>
+                <td>
+                  {e.dst_ip ? (
+                    <>
+                      <div>{e.domain || <span className="num">{e.dst_ip}</span>}</div>
+                      <div className="dim small"><GeoCell geo={e.geo} /></div>
+                    </>
+                  ) : <span className="dim">—</span>}
+                </td>
                 <td><SeverityTag severity={e.severity} /></td>
                 <td className="num"><b>{e.risk_score}</b></td>
                 <td className="dim small">
@@ -327,6 +337,19 @@ export function AlertsView({ events, devices, weights, onChanged }) {
               {open === e.id && (
                 <tr key={`${key}-d`} className="expando">
                   <td colSpan={columns.length}>
+                    {e.dst_ip && (
+                      <div className="expando-grid" style={{ marginBottom: 10 }}>
+                        <div>
+                          <h4>{ta('columns.target')}</h4>
+                          <div className="num">{e.dst_ip}</div>
+                          {e.domain && <div>{e.domain}</div>}
+                        </div>
+                        <div>
+                          <h4>{ta('columns.geo')}</h4>
+                          <GeoCell geo={e.geo} />
+                        </div>
+                      </div>
+                    )}
                     <pre className="detail-json">{JSON.stringify(e.detail, null, 2)}</pre>
                   </td>
                 </tr>

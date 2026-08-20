@@ -1,9 +1,10 @@
 # HTTPS 明文捕获 —— 参考 gojue/eCapture 的技术方案评估
 
-> 对应需求 F14（SSLKEYLOGFILE）/ F15（主动 MITM），二者在 [PROGRESS.md](PROGRESS.md) 中均为 ⬜ 未开始。
+> 对应需求 F14（uprobe/SSLKEYLOGFILE）/ F15（主动 MITM，建议不做）/ F45（手机端可选 MITM，已实现）。
+> 官网：https://www.beeeye.dev/
 > 参考实现：[gojue/ecapture](https://github.com/gojue/ecapture)
 >
-> 撰写日期：2026-08-19 · 阶段一已实现：2026-08-19
+> 撰写日期：2026-08-19 · 阶段一已实现：2026-08-19 · F45 已实现：2026-08-19
 
 ---
 
@@ -263,3 +264,50 @@ flowchart LR
 2. **明确改写 README 的隐私承诺**，把「不解密 TLS」限定为「不解密其他设备的 TLS」，并说明本机进程明文捕获默认关闭。
 3. **暂不实现 keylog 偏移表（阶段三）** —— eCapture 用几十个按版本编译的 eBPF 文件才撑住这件事，对本项目是不成比例的维护负担；等阶段一稳定、确有需求再说。
 4. **F15（主动 MITM）依然建议不做** —— 对目标 IoT 设备无效，且需要在设备上装证书，与本项目"无需在任何设备上装 agent"的前提直接冲突。
+
+---
+
+## 5. F45：手机端可选 MITM 解密（已实现）
+
+与 F15 是两个不同的功能，边界很清楚：**F15 是无差别、对全部设备的 MITM（不做）；F45 只对用户主动选择接入、并自行安装 BeeEye 根证书的那台设备生效**（手机、电脑），跟 Surge/Burp/mitmproxy 的使用模型一样。没装证书的设备（门锁、摄像头等）连接会直接失败，不存在静默明文透传——这是`internal/mitm`里反复验证过的行为，不是一句承诺。
+
+### 实现
+
+新增包 `internal/mitm`：
+
+| 文件 | 职责 |
+|---|---|
+| `ca.go` | 生成/加载本地根 CA（ECDSA P-256，自签名，10 年有效期）；私钥 `ca.key` 落盘 0600 权限 |
+| `leaf.go` | 按 SNI 动态签发叶子证书并缓存（共用一把叶子私钥，只是换证书，不是每个域名都重新生成密钥） |
+| `proxy.go` | HTTP CONNECT 代理：用刚签发的证书终止客户端 TLS，再向真实源站发起**完全校验**（无 `InsecureSkipVerify`）的 TLS 连接转发 |
+| `mobileconfig.go` | 把 CA 包成 Apple Configuration Profile（`.mobileconfig`），iOS/macOS 上有名称和说明的一键安装提示，而不是一个陌生的 PEM 文件 |
+
+**范围边界**：只处理 `CONNECT`（HTTPS）。普通 HTTP 请求直接返回 400——明文本来就不需要解密，这不是遗漏。
+
+**实测**（非模拟）：`internal/mitm` 的 3 项单元测试之外，用真实二进制对真实网站 `https://example.com` 走了一遍完整链路——`curl --cacert <生成的CA> -x 127.0.0.1:18443 https://example.com/` 拿到解密后的真实响应体；换成不信任该 CA 的 curl，连接直接被拒绝（"tls: bad certificate"），验证了"失败关闭"而非"静默明文透传"。`.mobileconfig` 用 Python `plistlib` 解析确认是合法的 Apple 配置描述文件，而不只是格式正确的 XML。
+
+### API
+
+| 端点 | 用途 |
+|---|---|
+| `GET /api/mitm/status` | 是否启用、监听地址、CA 指纹、已记录的解密条数 |
+| `GET /api/mitm/ca.pem` | 下载根证书（Android / Windows / macOS 手动导入用） |
+| `GET /api/mitm/ca.mobileconfig` | 下载配置描述文件（iOS/macOS 一键安装体验更好） |
+| `GET /api/mitm/exchanges` | 最近解密的请求/响应列表（内存环形缓冲，重启即清空，同 `internal/analyze.Store` 的设计考虑——这是本项目处理过的最敏感数据，绝不落盘） |
+| `GET /api/mitm/exchanges/{id}` | 单条完整记录，含请求头/响应头与 body（base64） |
+
+默认关闭（`mitm.enabled: false`），需要在 `config.yaml` 显式打开并重启。
+
+### 各平台"装了证书之后"的差异——这一步比证书格式本身更容易踩坑
+
+证书文件格式（X.509 PEM/DER）四个平台通用，`ca.pem` 都能用。但**让系统/应用真正信任它**这一步，四个平台不一样，装完不代表马上生效：
+
+| 平台 | 差异点 |
+|---|---|
+| Android | 设置里走"安装证书→CA 证书"即可，但 **Android 7+（API 24+）默认只信任系统预装根证书**——用户装的 CA 默认不会被 targetSDK ≥ 24 的 App 信任，除非该 App 的 network security config 显式声明信任用户证书。系统浏览器能被解密，很多做了证书锁定的 App（银行、部分社交类）装了也没用。 |
+| iOS / iPadOS | 装完 `.mobileconfig` 后**还要手动去**设置 → 通用 → 关于本机 → 证书信任设置，把这个根证书的"完全信任"打开，否则 profile 装了也不生效——这是苹果对任何用户新增根证书的强制要求，没有 profile 字段能跳过这一步。 |
+| macOS | 双击 `ca.pem`/`.mobileconfig` 进钥匙串访问后，**同样要手动**把该证书的信任设置改成"始终信任"，默认的"使用系统默认值"不会生效。 |
+| Windows | `.cer` 双击进证书导入向导，**必须手动选到"受信任的根证书颁发机构"**这个存储位置——选到"个人"证书装了也不生效。 |
+| 任意平台的 Firefox | 有自己独立的证书库，**不读取系统信任链**，得在 Firefox 设置里单独导入这份 CA，否则系统层面装了证书，Firefox 里访问 HTTPS 网站照样报证书错误。 |
+
+这些是所有 MITM 代理工具（mitmproxy/Charles/Burp）共有的通病，不是 BeeEye 特有的限制——记在这里是为了让"装了证书却没生效"不必每次都重新踩坑排查。

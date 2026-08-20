@@ -184,6 +184,15 @@ func (s *Session) Start(opt StartOptions) error {
 		return err
 	}
 
+	// Deliberately live.Open, not capsource.Open: the analyzer stays on
+	// AF_PACKET rather than competing for the same interface's eBPF TCX
+	// hook the agent may already be using. On this host, verified with
+	// bpftool prog show's run_cnt, only the *first* program attached to an
+	// interface's TCX chain is ever actually invoked — a second attach
+	// "succeeds" (no error) but never sees a packet. Since the agent is the
+	// long-running process eBPF's lower overhead matters most for, it gets
+	// first claim; the analyzer, started on demand, uses the capture path
+	// that has always supported multiple independent readers on one NIC.
 	src, real, openErr := live.Open(opt.Iface, opt.SnapLen, opt.Promisc)
 
 	s.mu.Lock()
@@ -228,8 +237,16 @@ func (s *Session) Start(opt StartOptions) error {
 func (s *Session) consume(packets <-chan live.Packet) {
 	names := s.Names()
 	for p := range packets {
-		s.mu.Lock()
+		// Dissecting is real work (field trees, string building) and s.dis is
+		// only ever touched from this one goroutine, so it does not need the
+		// session lock — doing it first keeps the critical section down to
+		// the ring/filter/subs bookkeeping, which is what a packet-detail
+		// request (Packet, an RLock) is actually contending with. Under fast
+		// capture this lock is re-acquired every packet; every microsecond
+		// held here is a microsecond a UI click waits behind it.
 		res := s.dis.Packet(p)
+
+		s.mu.Lock()
 		s.ring = append(s.ring, res)
 		if len(s.ring) > s.size {
 			// Drop the oldest in one slice re-slice rather than shifting.
@@ -395,10 +412,21 @@ func (s *Session) Packets(limit int) []*dissect.Result {
 }
 
 // Packet looks up one retained packet by its capture ordinal.
+//
+// This used to scan the ring linearly (up to s.size, normally 20000). No is
+// the capture ordinal — every frame that arrives gets one, strictly
+// increasing, whether or not it matches the display filter (see consume) —
+// so the ring is exactly a contiguous window [ring[0].No, ring[0].No+len)
+// and the lookup is a subtraction, not a search. That mattered in practice:
+// a click on a packet detail (this RLock) was competing with consume's
+// Lock, re-acquired on every arriving frame under fast capture, and a full
+// scan while finally holding the lock made that wait worse, not just
+// unlucky timing.
 func (s *Session) Packet(no int64) *dissect.Result {
 	s.mu.RLock()
-	for _, r := range s.ring {
-		if r.No == no {
+	if len(s.ring) > 0 {
+		if idx := no - s.ring[0].No; idx >= 0 && idx < int64(len(s.ring)) {
+			r := s.ring[idx]
 			s.mu.RUnlock()
 			return r
 		}

@@ -2,9 +2,21 @@
 
 **Home IoT gateway traffic analysis — device fingerprinting, protocol dissection, and post-intrusion behaviour detection, built on eBPF.**
 
-[中文](README.zh-CN.md) · [Install guide](INSTALL.md) · [Usage guide](USAGE.md) · [Architecture](ARCHITECTURE.md) · [Requirements & design](program.en.md) · [Implementation progress](PROGRESS.en.md) · [TLS decryption](TLS-DECRYPT.md) · [Changelog](CHANGELOG.md)
+[Website](https://www.beeeye.dev/) · [中文](README.zh-CN.md) · [Install guide](INSTALL.md) · [Usage guide](USAGE.en.md) · [Architecture](ARCHITECTURE.md) · [Requirements & design](program.en.md) · [Implementation progress](PROGRESS.en.md) · [TLS decryption](TLS-DECRYPT.md) · [Changelog](CHANGELOG.md)
 
-BeeEye runs on the Ubuntu box that already routes your home network. It attaches eBPF programs to the LAN-side interfaces, identifies every device that joins, and watches what those devices talk to — without decrypting anything and without installing an agent on a single camera, lock or phone.
+BeeEye runs on the Ubuntu box that already routes your home network. It attaches eBPF programs to the LAN-side interfaces, identifies every device that joins, and watches what those devices talk to — without installing an agent on a single camera, lock or phone, and without decrypting any of *their* traffic (the one deliberate exception is the gateway's own processes, decrypted locally and opt-in for other devices — see [Privacy](#privacy)).
+
+## Screenshots
+
+The live analyzer — same live capture, switched between its light/dark themes and English/Chinese, all without a reload:
+
+| Light · English | Dark · English |
+|---|---|
+| ![Analyzer, light theme, English](PIC/analyzer-light-en.png) | ![Analyzer, dark theme, English](PIC/analyzer-dark-en.png) |
+
+| Light · 中文 | Dark · 中文 |
+|---|---|
+| ![Analyzer, light theme, Chinese](PIC/analyzer-light-zh.png) | ![Analyzer, dark theme, Chinese](PIC/analyzer-dark-zh.png) |
 
 ---
 
@@ -226,3 +238,30 @@ Notable checks, because they cover the things most likely to break silently:
 This is under active development. [PROGRESS.en.md](PROGRESS.en.md) tracks every requirement (F1–F44) with its real state and the specific gaps, and is kept in sync with the code. [ARCHITECTURE.md](ARCHITECTURE.md) explains how the pieces fit together, with diagrams.
 
 What works end to end today: both UIs, the REST API, the display-filter engine, the dissector, the detection engine, pcap export, and the CUDA/CPU colour field — `scripts/smoke.sh` checks 24 of those paths and all 24 pass. The agent captures live via AF_PACKET, falling back to the simulated scenario (announced) only without capture permission; wiring the eBPF ring buffer in as a lower-overhead source is the main remaining capture-path task (see the note above).
+
+---
+
+## Acknowledgements
+
+BeeEye doesn't stand alone — its design leans directly on a few projects, and its code leans on the open-source libraries listed below.
+
+**Design influences**
+
+- **[Wireshark](https://www.wireshark.org/)** — the three-pane packet list / protocol field tree / hex dump layout, the display-filter grammar `internal/dfilter` implements a compatible subset of, and JA3/TLS field naming conventions all follow Wireshark's, deliberately, so the muscle memory transfers.
+- **[eCapture](https://github.com/gojue/ecapture)** — the uprobe-based TLS plaintext capture design `BeeEye-tlspeek` (F14) follows the same shape eCapture pioneered (attach to a crypto library's read/write functions, no MITM, no cert on the target). Its module list is also the roadmap for BeeEye's own gaps: GoTLS, GnuTLS and NSS coverage, and combined pcap+keylog export are still open here (see [PROGRESS.en.md](PROGRESS.en.md) F14/F45) precisely because eCapture already proved each one is buildable. See [TLS-DECRYPT.md](TLS-DECRYPT.md) for where the two projects' scopes diverge (gateway-local only, here, on purpose).
+- **[Pcap-Analyzer](https://github.com/HatBoy/Pcap-Analyzer)** — the shape of the offline-analysis view (protocol/talker/conversation stats, credential extraction, file carving, attack-pattern heuristics) that both `internal/analyze` and the overview UI's "Analysis" tab follow.
+
+**Open-source libraries this code runs on**
+
+| | Used for |
+|---|---|
+| [cilium/ebpf](https://github.com/cilium/ebpf) | Go bindings for loading/attaching the eBPF CO-RE program and reading the ringbuf |
+| [modernc.org/sqlite](https://gitlab.com/cznic/sqlite) | pure-Go SQLite (no CGO) backing the overview's storage layer |
+| [oschwald/geoip2-golang](https://github.com/oschwald/geoip2-golang) + [maxminddb-golang](https://github.com/oschwald/maxminddb-golang) | reading MaxMind-format `.mmdb` GeoIP databases, entirely offline |
+| [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys) | the raw AF_PACKET socket and RTNETLINK hot-plug watcher — no libpcap, no CGO |
+| [gopkg.in/yaml.v3](https://github.com/go-yaml/yaml) | `config.yaml` / `port-service-map.yaml` parsing |
+| [React](https://react.dev/) + [Vite](https://vitejs.dev/) | both frontend SPAs |
+| [react-i18next](https://react.i18next.com/) / [i18next](https://www.i18next.com/) | the bilingual (EN/中文) UI in both frontends |
+| [NVIDIA CUDA](https://developer.nvidia.com/cuda-toolkit) | optional GPU path for the traffic colour-field renderer — the CPU fallback is bit-compatible and always available |
+
+And of course [Spamhaus](https://www.spamhaus.org/) for the DROP list `internal/threatintel` pulls threat-intel CIDR ranges from (F29), and the [MaxMind GeoLite2](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data) database format, if you choose to drop one into `data/` for more accurate geolocation than the built-in table.

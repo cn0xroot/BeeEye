@@ -3,6 +3,8 @@
     "time": "时间",
     "device": "设备",
     "type": "类型",
+    "target": "关联目标",
+    "geo": "地理位置",
     "severity": "等级",
     "score": "风险分",
     "signals": "命中信号",

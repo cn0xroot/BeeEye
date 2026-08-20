@@ -37,14 +37,44 @@ type Detection struct {
 		Low    int `yaml:"low"`    // 15
 	} `yaml:"risk_thresholds"`
 	AutoBlock bool `yaml:"auto_block"` // F38, default false
+	Baseline  struct {
+		MinDays     int     `yaml:"min_days"`      // history required in an hour-bucket before it can fire
+		ZThreshold  float64 `yaml:"z_threshold"`   // |z| at or above this is an outlier
+		MinStdDevKB float64 `yaml:"min_stddev_kb"` // floor for stddev, guards near-constant traffic
+	} `yaml:"baseline"`
+}
+
+// ThreatIntel configures the public blocklist feed(s) merged into the
+// detection engine's ThreatIntel (F29, internal/threatintel). Disabled
+// entirely with enabled: false — the engine then runs on injected/demo
+// entries only, exactly as before this existed.
+type ThreatIntelConfig struct {
+	Enabled      bool     `yaml:"enabled"`
+	Feeds        []string `yaml:"feeds"`         // names from threatintel.KnownFeeds
+	RefreshHours int      `yaml:"refresh_hours"` // how often to re-fetch
+	CacheDir     string   `yaml:"cache_dir"`     // last-good copy, survives a restart with no network
+}
+
+// MITMConfig configures F45's opt-in, user-installed-certificate TLS
+// interception (internal/mitm). Off by default — this is a different trust
+// boundary from the rest of BeeEye (it decrypts HTTPS for whichever device
+// installs the CA and points its proxy setting here), so it never turns
+// itself on; a person has to edit this file to enable it.
+type MITMConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"`  // CONNECT proxy address, e.g. ":8443"
+	CADir   string `yaml:"ca_dir"`  // where ca.pem / ca.key are read from and written to
+	MaxLog  int    `yaml:"max_log"` // in-memory decrypted-exchange history depth, oldest evicted first
 }
 
 type Config struct {
-	ListenAddr string     `yaml:"listen_addr"`
-	DBPath     string     `yaml:"db_path"`
-	WebDir     string     `yaml:"web_dir"`
-	Interfaces Interfaces `yaml:"interfaces"`
-	Detection  Detection  `yaml:"detection"`
+	ListenAddr  string            `yaml:"listen_addr"`
+	DBPath      string            `yaml:"db_path"`
+	WebDir      string            `yaml:"web_dir"`
+	Interfaces  Interfaces        `yaml:"interfaces"`
+	Detection   Detection         `yaml:"detection"`
+	ThreatIntel ThreatIntelConfig `yaml:"threat_intel"`
+	MITM        MITMConfig        `yaml:"mitm"`
 	// SimulateSeed drives the built-in simulated capture source used when no
 	// eBPF-capable kernel is attached (dev / demo mode).
 	SimulateSeed int64 `yaml:"simulate_seed"`
@@ -76,6 +106,17 @@ func Default() *Config {
 	c.Detection.RiskThresholds.Medium = 30
 	c.Detection.RiskThresholds.Low = 15
 	c.Detection.AutoBlock = false
+	c.Detection.Baseline.MinDays = 5
+	c.Detection.Baseline.ZThreshold = 3.0
+	c.Detection.Baseline.MinStdDevKB = 8
+	c.ThreatIntel.Enabled = true
+	c.ThreatIntel.Feeds = []string{"spamhaus_drop"}
+	c.ThreatIntel.RefreshHours = 24
+	c.ThreatIntel.CacheDir = "./data/threatintel"
+	c.MITM.Enabled = false
+	c.MITM.Listen = ":8443"
+	c.MITM.CADir = "./data/mitm"
+	c.MITM.MaxLog = 500
 	return c
 }
 

@@ -10,11 +10,20 @@
 #ifndef __BeeEye_EVENTS_H__
 #define __BeeEye_EVENTS_H__
 
-/* Bytes of L4 payload shipped per event. Large enough to hold a full DNS
- * message and the SNI/cipher-list region of a real-world TLS ClientHello
- * (Chrome's run ~500B with GREASE and padding); anything past this is not
- * needed for SNI/ALPN/JA3 extraction (§3.4.3). */
-#define PAYLOAD_MAX 512
+/* Bytes of payload shipped per event. Two different things share this one
+ * buffer size:
+ *   - the selective full-fidelity kinds (DNS/TLS ClientHello/SSDP/DHCP/ARP)
+ *     only ever need the L4 payload's first few hundred bytes for SNI/ALPN/
+ *     JA3/QNAME extraction (Chrome's ClientHello runs ~500B with GREASE and
+ *     padding);
+ *   - EVT_RAW_FRAME (added for the eBPF ring buffer to serve as a live.Source
+ *     on par with AF_PACKET — see internal/ebpf/source.go) needs the whole
+ *     Ethernet frame, VLAN tag included, so a re-dissected packet is not
+ *     missing header bytes AF_PACKET would have delivered. 1536 covers the
+ *     standard 1500-byte MTU frame plus an Ethernet header and one VLAN tag;
+ *     a jumbo frame truncates, exactly like a snaplen would.
+ */
+#define PAYLOAD_MAX 1536
 
 /* Transport numbers, spelled with a BE_ prefix so the names can never collide
  * with an enum of the same name emitted into vmlinux.h by bpftool. */
@@ -46,6 +55,13 @@ enum BeeEye_evt {
 	EVT_ARP = 7,           /* lateral-movement signal (F34/F36) */
 	EVT_SSDP = 8,          /* discovery broadcast → fingerprinting (F1) */
 	EVT_DHCP = 9,          /* Option 55/60 fingerprint (F1, §3.5.2) */
+	/* Whole-frame mirror, only emitted when CFG_RAW_FRAME_MODE is set.
+	 * Unlike every other kind above, this bypasses in-kernel protocol
+	 * identification and tiering entirely — it exists so the ring buffer
+	 * can serve as a live.Source (internal/ebpf/source.go), handing
+	 * userspace's dissector the same raw Ethernet frames AF_PACKET does,
+	 * for hosts where the lower per-packet overhead of eBPF is wanted. */
+	EVT_RAW_FRAME = 10,
 };
 
 /* Device categories. Userspace writes these back into device_stats after
@@ -69,6 +85,9 @@ enum BeeEye_category {
 enum BeeEye_cfg_slot {
 	CFG_FLOW_INTERVAL_NS = 0,      /* flush interval for ordinary devices */
 	CFG_SENSITIVE_INTERVAL_NS = 1, /* flush interval for lock/camera */
+	/* Non-zero switches every packet to EVT_RAW_FRAME (whole-frame mirror)
+	 * instead of the selective reporting above — see EVT_RAW_FRAME. */
+	CFG_RAW_FRAME_MODE = 2,
 	CFG_SLOT__MAX = 8,
 };
 

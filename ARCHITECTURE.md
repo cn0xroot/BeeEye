@@ -1,6 +1,7 @@
 # 蜂眼 BeeEye — 核心技术栈与架构
 
 > 本文描述的是**仓库里实际存在的代码**，不是设计意图。包名、端口、依赖、表名均可在源码中直接对照。
+> 官网：https://www.beeeye.dev/
 > 需求编号（F1–F44）对应 [program.md](program.md) §2.4，实现进度见 [PROGRESS.md](PROGRESS.md)。
 >
 > 最后更新：2026-08-19

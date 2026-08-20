@@ -22,8 +22,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"BeeEye/internal/capsource"
 	"BeeEye/internal/config"
 	"BeeEye/internal/detect"
 	"BeeEye/internal/dissect"
@@ -33,6 +35,7 @@ import (
 	"BeeEye/internal/model"
 	"BeeEye/internal/protocol"
 	"BeeEye/internal/store"
+	"BeeEye/internal/tcapture"
 )
 
 // FlushInterval is how often aggregated flows are written to the store and the
@@ -45,6 +48,15 @@ type Pipeline struct {
 	st  *store.Store
 	src live.Source
 	eng *detect.Engine
+	// intel is read fresh on every flush() and may be replaced at any time by
+	// SetIntel from another goroutine (a periodic threat-feed refresh), so it
+	// is an atomic pointer rather than a plain field guarded by mu — flush()
+	// runs on p.run()'s goroutine and must never block on a feed fetch.
+	intel atomic.Pointer[detect.ThreatIntel]
+	// tcap is nil until SetTargetedCapture is called (F11), and every packet
+	// on the hot path checks it, so an atomic pointer avoids taking a lock
+	// per packet just to find out no session is running.
+	tcap atomic.Pointer[tcapture.Manager]
 
 	live  bool // true = real capture, false = simulator (F43)
 	iface string
@@ -77,7 +89,7 @@ type deviceSeen struct {
 // promisc mirror the analyzer's defaults. The returned Pipeline is already
 // draining packets; call Close to stop it.
 func Open(st *store.Store, iface string, cfg *config.Detection, intel detect.ThreatIntel) (*Pipeline, error) {
-	src, real, err := live.Open(iface, live.DefaultSnapLen, true)
+	src, real, err := capsource.Open(iface, live.DefaultSnapLen, true)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +105,8 @@ func Open(st *store.Store, iface string, cfg *config.Detection, intel detect.Thr
 		stop:       make(chan struct{}),
 		done:       make(chan struct{}),
 	}
-	p.eng = &detect.Engine{Cfg: cfg, Intel: intel, Cats: p.cats}
+	p.eng = &detect.Engine{Cfg: cfg, Cats: p.cats}
+	p.intel.Store(&intel)
 	go p.run()
 	return p, nil
 }
@@ -101,6 +114,22 @@ func Open(st *store.Store, iface string, cfg *config.Detection, intel detect.Thr
 // Live reports whether the capture is real (true) or the simulator (false).
 func (p *Pipeline) Live() bool    { return p.live }
 func (p *Pipeline) Iface() string { return p.iface }
+
+// Source names which capture source is actually running: "ebpf" | "af_packet"
+// | "simulator" (live.Source.Name()'s own values — see capsource.Open).
+func (p *Pipeline) Source() string { return p.src.Name() }
+
+// SetIntel replaces the threat-intel snapshot the detection engine uses on
+// its next flush. Safe to call from another goroutine — see the intel field
+// comment.
+func (p *Pipeline) SetIntel(intel detect.ThreatIntel) { p.intel.Store(&intel) }
+
+// SetTargetedCapture wires in the manager that F11's on-demand, MAC-filtered
+// captures use. Every packet is offered to it on the hot path (a cheap
+// atomic-pointer check when mgr is nil or has no active session for that
+// packet's MAC), so a targeted session sees the same live packets the
+// dissector does — not a replay of whatever the ring buffer retained.
+func (p *Pipeline) SetTargetedCapture(mgr *tcapture.Manager) { p.tcap.Store(mgr) }
 
 func (p *Pipeline) run() {
 	defer close(p.done)
@@ -120,6 +149,9 @@ func (p *Pipeline) run() {
 			if !ok {
 				p.flush()
 				return
+			}
+			if mgr := p.tcap.Load(); mgr != nil {
+				mgr.Feed(pkt)
 			}
 			p.ingest(dis.Packet(pkt))
 		}
@@ -299,6 +331,9 @@ func (p *Pipeline) flush() {
 		return
 	}
 	dnsRecs, _ := p.st.DNSRecords("", 100000)
+	if intel := p.intel.Load(); intel != nil {
+		p.eng.Intel = *intel
+	}
 	for _, ev := range p.eng.Analyze(conns, dnsRecs, nil) {
 		ev := ev
 		key := ev.MAC + "|" + ev.EventType + "|" + detailKey(ev.Detail)

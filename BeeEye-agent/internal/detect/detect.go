@@ -9,6 +9,7 @@ package detect
 
 import (
 	"math"
+	"net"
 	"sort"
 	"strings"
 	"time"
@@ -21,23 +22,46 @@ import (
 // Signal weights from program.md §3.11.5. Kept as a map so they are config-like
 // rather than hardcoded at call sites.
 var SignalWeights = map[string]int{
-	"threat_intel": 50,
-	"lateral":      40,
-	"fanout":       30,
-	"beacon":       25,
-	"dns_anomaly":  20,
-	"ja3_mismatch": 15,
-	"first_target": 10,
-	"geo_anomaly":  10,
-	"offhours":     5,
+	"threat_intel":       50,
+	"lateral":            40,
+	"fanout":             30,
+	"beacon":             25,
+	"dns_anomaly":        20,
+	"ja3_mismatch":       15,
+	"first_target":       10,
+	"geo_anomaly":        10,
+	"baseline_deviation": 15,
+	"offhours":           5,
 }
 
-// ThreatIntel holds offline blocklists (program.md F29). In production these
-// come from public feeds cached locally; here they are injected.
+// ThreatIntel holds offline blocklists (program.md F29). BadIPs/BadDomains/
+// BadJA3 are exact-match sets (hand-injected or learned); BadCIDRs holds the
+// network ranges a public feed publishes (internal/threatintel) — a single
+// hijacked /20 is one CIDR entry, not thousands of individual IPs.
 type ThreatIntel struct {
 	BadIPs     map[string]bool
 	BadDomains map[string]bool
 	BadJA3     map[string]bool
+	BadCIDRs   []*net.IPNet
+}
+
+// MatchIP reports whether ip is covered by an exact entry or a CIDR range,
+// and a human-readable string naming what matched (the IP itself, or the
+// covering CIDR) for the event detail.
+func (t ThreatIntel) MatchIP(ip string) (string, bool) {
+	if t.BadIPs[ip] {
+		return ip, true
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return "", false
+	}
+	for _, n := range t.BadCIDRs {
+		if n != nil && n.Contains(parsed) {
+			return n.String(), true
+		}
+	}
+	return "", false
 }
 
 // Subject is the (device, remote target) pair a risk score is computed for.
@@ -73,6 +97,97 @@ func fanoutThresholds(cat model.DeviceCategory) (int, int) {
 	}
 }
 
+// BaselineHit is a device whose traffic volume this hour is a statistical
+// outlier against its own history in that hour-of-day bucket (F10).
+type BaselineHit struct {
+	Hour       int
+	ValueBytes float64
+	MeanBytes  float64
+	StdDevKB   float64
+	Z          float64
+}
+
+// Baseline learns, per device and hour-of-day, a distribution of bytes
+// transferred in that hour across the days seen in conns, and flags today's
+// value for the *current* hour as an outlier when it is more than
+// Cfg.Baseline.ZThreshold standard deviations from that device's own mean —
+// e.g. a NAS that only ever talks 09:00–18:00 suddenly active at 03:00.
+//
+// This stays a pure function over conns like every other detector here (see
+// the package doc): there is no persisted model, so a restart costs the
+// learned baseline, exactly like the rest of the engine's state. conns is
+// already the full rolling window the caller queries from the store, so
+// recomputing the distribution on every call is the same O(n) shape as
+// Beacon/Fanout, not new overhead.
+func (e *Engine) Baseline(conns []model.Connection, now time.Time) map[Subject]BaselineHit {
+	type key struct {
+		mac  string
+		hour int
+	}
+	// perDayBytes[key][day] = bytes that device sent/received in that
+	// hour-of-day, on that calendar day.
+	perDayBytes := map[key]map[string]int64{}
+	for _, c := range conns {
+		k := key{c.MAC, c.TS.Hour()}
+		day := c.TS.Format("2006-01-02")
+		if perDayBytes[k] == nil {
+			perDayBytes[k] = map[string]int64{}
+		}
+		perDayBytes[k][day] += c.Bytes
+	}
+
+	minDays := e.Cfg.Baseline.MinDays
+	if minDays <= 0 {
+		minDays = 5
+	}
+	zThresh := e.Cfg.Baseline.ZThreshold
+	if zThresh <= 0 {
+		zThresh = 3.0
+	}
+	minStdDev := e.Cfg.Baseline.MinStdDevKB * 1024
+
+	curHour := now.Hour()
+	curDay := now.Format("2006-01-02")
+
+	out := map[Subject]BaselineHit{}
+	for k, days := range perDayBytes {
+		if k.hour != curHour {
+			continue // only ever score "this hour" against its own history
+		}
+		today, hasToday := days[curDay]
+		if !hasToday {
+			continue
+		}
+		// Welford's online mean/variance over every *other* day seen in this
+		// hour-bucket — today must not be part of its own baseline.
+		var mean, m2, n float64
+		for day, b := range days {
+			if day == curDay {
+				continue
+			}
+			n++
+			delta := float64(b) - mean
+			mean += delta / n
+			m2 += delta * (float64(b) - mean)
+		}
+		if n < float64(minDays) {
+			continue
+		}
+		stddev := math.Sqrt(m2 / n)
+		if stddev < minStdDev {
+			stddev = minStdDev
+		}
+		z := (float64(today) - mean) / stddev
+		if math.Abs(z) >= zThresh {
+			out[Subject{MAC: k.mac}] = BaselineHit{
+				Hour: k.hour, ValueBytes: float64(today), MeanBytes: mean,
+				StdDevKB: stddev / 1024, Z: z,
+			}
+		}
+	}
+	return out
+}
+
 // Analyze runs the full pipeline over a batch of connections + DNS records and
 // returns the events to persist. baselinePairs is the set of (mac|dstIP) pairs
 // considered "already known" for first-target detection (§3.11.1).
@@ -85,8 +200,8 @@ func (e *Engine) Analyze(conns []model.Connection, dns []model.DNSRecord, baseli
 
 	// --- threat intel (F29) ---
 	for _, c := range conns {
-		if e.Intel.BadIPs[c.DstIP] {
-			add(c.MAC, c.DstIP, "threat_intel", map[string]any{"matched": c.DstIP, "kind": "ip"})
+		if matched, ok := e.Intel.MatchIP(c.DstIP); ok {
+			add(c.MAC, c.DstIP, "threat_intel", map[string]any{"matched": matched, "kind": "ip"})
 		}
 		if c.JA3 != "" && e.Intel.BadJA3[c.JA3] {
 			add(c.MAC, c.DstIP, "threat_intel", map[string]any{"matched": c.JA3, "kind": "ja3"})
@@ -103,6 +218,14 @@ func (e *Engine) Analyze(conns []model.Connection, dns []model.DNSRecord, baseli
 	for sub, hit := range e.Beacon(conns) {
 		add(sub.MAC, sub.DstIP, "beacon", map[string]any{
 			"interval_s": round1(hit.MeanInterval), "cv": round3(hit.CV), "count": hit.Count})
+	}
+
+	// --- behavioral baseline (F10) ---
+	for sub, hit := range e.Baseline(conns, time.Now()) {
+		add(sub.MAC, "", "baseline_deviation", map[string]any{
+			"hour": hit.Hour, "z_score": round3(hit.Z),
+			"value_kb": round1(hit.ValueBytes / 1024), "mean_kb": round1(hit.MeanBytes / 1024),
+			"stddev_kb": round1(hit.StdDevKB)})
 	}
 
 	// --- fanout / scan (F36) ---

@@ -4,6 +4,47 @@ All notable changes to BeeEye are documented in this file.
 
 [中文](CHANGELOG.zh-CN.md)
 
+## [Unreleased]
+
+## [1.1.0] — 2026-08-20
+
+### Added
+
+- **HTTPS decryption on by default**: the analyzer now attaches decryption uprobes automatically on startup (`internal/gui/decrypt.go`) instead of requiring a separate manual step — verified decrypting real curl traffic live.
+- **Crypto-library support became a declarative rule table**: `internal/tlspeek/rules.go` — one rule (family name, SONAME regex, read/write symbols) covers a whole library family across versions/distros by regex rather than a fixed filename; adding a library is a one-line addition. **GnuTLS** joins **OpenSSL** as a supported family (72 GnuTLS processes + 44 OpenSSL processes attached simultaneously on the reference machine).
+- **Crypto-library detection**: `BeeEye-tlspeek -detect` + `GET /api/decrypt/libs` report, per library, whether its ELF symbols are actually present (attachable vs. merely installed) and its **version, parsed from the library's own embedded version banner** (e.g. `OpenSSL 3.0.13`, `GnuTLS 3.8.3`), correctly distinguishing two different OpenSSL builds installed in different environments on the same host.
+- **F22, real GeoIP database support**: `internal/geoip/mmdb.go` loads standard MaxMind-format `.mmdb` files (via `geoip2-golang`), auto-discovering `./data/`, `/usr/share/GeoIP/`, and a Clash `Country.mmdb`; resolves country/province/city when a City database is present, operator/ASN when an ASN database is present. New `GET /api/geoip/status` and an overview UI accuracy badge (`GeoAccuracyBadge.jsx`) tell the operator whether locations are precise, country-only, or the built-in coarse fallback. New `scripts/geoip-setup.sh` guides downloading GeoLite2-City/ASN (requires the user's own free MaxMind license key) — the download itself does not touch the "no per-IP online lookups" privacy requirement, since every lookup after the file lands is local.
+- **F45, decrypted-request list UI**: the MITM proxy's `/api/mitm/exchanges` API now has a frontend panel (`Mitm.jsx`) — a live-updating table of decrypted requests, click-to-expand into request/response headers and body (binary bytes rendered as `·` placeholders). Verified against a real end-to-end MITM session: a trusted client's decrypted `GET https://example.com` appears in the list with its full response body visible.
+- **F32, world map changed from a 3D globe to a 2D map with GPU rendering**, per explicit request: `WorldMap.jsx` replaces `Globe.jsx` (deleted). WebGL2 fragment shaders render destinations as additively-blended radial glows (repeated/overlapping traffic visibly brightens) and animated great-circle-ish arcs; colours are read live from the active theme's CSS variables. A Canvas2D fallback renderer (radial gradients, same visual language) covers browsers/environments without WebGL2, so the map always shows something rather than an error.
+- **Appearance settings panel** on both UIs: a theme picker with live-preview swatches (9 themes on the overview UI, 5 on the analyzer, including two new high-chroma themes — **Midnight Neon** and **Matrix**), a font picker (System / Tech Mono / Rounded / Serif, each option rendered in its own font), and a UI-scale picker (S/M/L/XL via CSS zoom). All three persist per-browser and are independent between the two UIs.
+- An `INSTALL.md` / `INSTALL.zh-CN.md` pair: a from-scratch setup guide for a brand-new clean host, including the actual hardware/software versions this project is developed and tested on.
+- A bilingual `USAGE.en.md` mirroring `USAGE.md`, kept in sync, linked from the English README.
+
+### Fixed
+
+- **Analyzer layout bug**: selecting a packet could cover the packet list with the detail region, making other traffic unreachable. Root cause: the endpoint-info bar and the plaintext pane had been added as implicit grid children rather than inside the intended 2-column/3-column structure. Fixed by wrapping the detail region in its own flex container as the second grid row, with the lower region now an explicit 3-column grid (field tree / hex / plaintext) where every pane scrolls internally and never grows to cover the list above it.
+- Two crypto-library-detection bugs found while adding the version-banner parser: a GnuTLS marker match could land on an unrelated string containing the word "GnuTLS" (its own error-message table) instead of the version banner — fixed by requiring a digit immediately after the marker; OpenSSL's version string usually lives in `libcrypto` even when `libssl` is a separate file — fixed by falling back to the sibling `libcrypto` file next to a given `libssl` path.
+- **Decryption attach bugs**: uprobes were being attempted against `libcrypto` (which does not export `SSL_write`/`SSL_read` — only `libssl` does) and against library paths discovered from `/proc/*/maps` that no longer existed on disk by the time of attach (a process that had since exited or a path outside the mount namespace) — both fixed by filtering to rule-matched libssl-family paths and skipping paths that fail `os.Stat`.
+
+- **F10, behavior baselining**: `internal/detect.Engine.Baseline` learns a per-device, per-hour-of-day traffic distribution (Welford online mean/stddev across the days seen in that hour bucket) and flags today's value as an outlier past a configurable z-score threshold — e.g. a NAS that only ever talks 09:00–18:00 suddenly active at 03:00. Stays a pure function like every other detector here; no persisted model.
+- **F11, on-demand targeted capture**: `internal/tcapture` + `POST /api/capture/targeted` starts a fresh, MAC-filtered pcap capture for a bounded duration/byte budget, distinct from F44's export of the existing ring buffer. Verified live against a real gateway MAC: 1811 frames / 1.6MB captured, every frame in the downloaded pcap correctly matched the target MAC on read-back.
+- **F20, interface hot-plug discovery**: a raw AF_NETLINK watcher (`internal/live/hotplug.go`) reacts to a NIC appearing or disappearing without a restart; `auto_discover.exclude_patterns` (present in config since the start but never consulted) now actually drives interface selection. Verified against a real dummy NIC, including the kernel-event parsing and the interface-selection logic before/after the NIC exists.
+- **F29, real threat-intel feed**: `internal/threatintel` replaces "the caller injects everything" with a real Spamhaus DROP blocklist fetch, local disk cache, and periodic background refresh that never blocks capture on a network fetch. `detect.ThreatIntel` gained CIDR-range matching (`BadCIDRs` + `MatchIP`) alongside the existing exact-match sets. Verified live: 1693 CIDR ranges fetched and cached.
+- **F4, CoAP field decoding**: full RFC 7252 parsing (header, token, delta-encoded options — Uri-Path, Uri-Query, Content-Format, Observe, etc.) rather than protocol identification only.
+- **eBPF ring buffer as the agent's capture source**: the CO-RE kernel program gained a raw-frame mode (`EVT_RAW_FRAME` + `CFG_RAW_FRAME_MODE`) that mirrors every packet's whole frame, wrapped by `internal/ebpf.OpenEBPF` into an ordinary `live.Source` structurally identical to AF_PACKET's. `internal/capsource` implements the fallback chain (eBPF → AF_PACKET → simulator); `internal/livesource` (the agent) uses it. Verified live on a real NIC with `connection_count` climbing in real time under `source: "ebpf"`.
+- An **Acknowledgements** section in the README crediting the projects BeeEye's design leans on (Wireshark, [eCapture](https://github.com/gojue/ecapture), [Pcap-Analyzer](https://github.com/HatBoy/Pcap-Analyzer)) and the open-source libraries it runs on.
+- **BeeEye-desktop**: a ~200-line Tauri 2 shell (`BeeEye-desktop/src-tauri`) that wraps the existing `BeeEye-gui` web UI in a native window for an operator's own desktop — connects to an already-running backend or spawns one itself, kills only the child it spawned on close. Duplicates no frontend code. Verified building to a working binary on the reference machine.
+
+### Fixed
+
+- A data race in `tcapture.Session`'s deadline-timer handling (`s.timer` assigned outside the lock the callback reads it under), caught by `go test -race` before it shipped.
+- `api.Server`'s data-source and targeted-capture state (`SetSource`/`SetTargetedCapture`) could be read mid-update once the hot-plug supervisor started calling them more than once at runtime; both are now atomic-pointer swaps of an immutable snapshot instead of separate plain fields, so a concurrent reader never sees a torn combination.
+- `dns.id` was registered as a display field twice with two different formats (decimal and `0x`-hex), so filtering/reading it back returned two values for one field; now registered once (hex, matching the tree's display value).
+
+### Notes
+
+- Discovered — not a bug to fix, but worth recording: on this host's kernel, TCX invokes only the *first* eBPF program attached to a given interface/direction; a second attach "succeeds" but is never actually called (confirmed via `bpftool prog show`'s `run_cnt`). Because of this, only the agent uses eBPF; the analyzer intentionally stays on AF_PACKET rather than the two competing for one NIC's hook.
+
 ## [1.0.0] — 2026-08-19
 
 First tagged release. BeeEye is a home IoT gateway traffic analysis system: two

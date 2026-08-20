@@ -6,6 +6,7 @@ import Header from './components/Header'
 import Analysis from './components/Analysis'
 import FilterPanel from './components/FilterPanel'
 import Overview from './components/Overview'
+import Mitm from './components/Mitm'
 import { DevicesView, ConnectionsView, IPView, ProtocolView, DNSView, AlertsView } from './components/Views'
 
 // Views that consume the shared filter (F30). The overview and the alert list
@@ -121,6 +122,7 @@ export default function App() {
         {view === 'byIp' && <IPView rows={ipRows} devices={devices} />}
         {view === 'byProtocol' && <ProtocolView rows={protoRows} />}
         {view === 'analysis' && <Analysis />}
+        {view === 'mitm' && <Mitm />}
         {view === 'dns' && <DNSView records={dnsRows} devices={devices} />}
         {view === 'alerts' && (
           <AlertsView

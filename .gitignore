@@ -35,6 +35,9 @@ data/GeoLite2-*.mmdb
 data/GeoCN.mmdb
 data/Country.mmdb
 
+# ── Marketing / scratch, not project code ──────────────────────────
+/html/
+
 # ── Local / editor / OS ────────────────────────────────────────────
 .DS_Store
 *.swp
@@ -49,3 +52,8 @@ data/Country.mmdb
 *.test
 *.out
 coverage.txt
+
+# ── Rust / Tauri (BeeEye-desktop) ──────────────────────────────────
+BeeEye-desktop/src-tauri/target/
+BeeEye-desktop/src-tauri/gen/
+*.rs.bk

@@ -11,7 +11,8 @@
     "byProtocol": "按协议",
     "dns": "DNS",
     "alerts": "告警",
-    "analysis": "抓包分析"
+    "analysis": "抓包分析",
+    "mitm": "证书与解密"
   },
   "settings": {
     "language": "语言",
@@ -210,5 +211,74 @@
   "source": {
     "live": "● 实时 · {{iface}}",
     "simulated": "⚠ 模拟数据"
+  },
+  "mitm": {
+    "title": "手机/电脑端可选解密",
+    "intro": "装一张本机生成的根证书，把设备的 HTTPS 代理指向下面这个地址，就能看到那台设备自己的明文流量——跟 Surge、Burp、mitmproxy 是同一套用法。没装证书的设备，连接会直接失败，不会被静默放行成明文。",
+    "disabledTitle": "还没开启。",
+    "disabledBody": "在 config.yaml 里把下面这段加上（或把 enabled 改成 true），重启 agent 即可。",
+    "proxyAddress": "代理地址",
+    "proxyAddressHint": "在设备的 Wi-Fi/HTTPS 代理设置里填这个",
+    "fingerprint": "证书指纹",
+    "fingerprintHint": "装完之后，可以拿这个跟设备上显示的做个对照",
+    "exchanges": "已解密的请求数",
+    "downloadTitle": "下载根证书",
+    "downloadPem": "下载证书（PEM）",
+    "downloadMobileConfig": "下载 iOS/macOS 描述文件",
+    "downloadHint": "iPhone/iPad/Mac 优先用右边这个，安装提示会带名称和说明，不是一个陌生文件名。Android/Windows 用左边那个。",
+    "platformTitle": "装上证书之后，还要做什么",
+    "platform": "平台",
+    "platformCaveat": "需要注意的地方",
+    "platforms": {
+      "android": {
+        "name": "Android",
+        "caveat": "设置里走「安装证书→CA 证书」就行，但 Android 7 以上默认只信任系统预装的根证书——用户装的证书，很多做了证书锁定的 App（银行、部分社交类）不会认，只有系统浏览器等普通应用才会被解密。"
+      },
+      "ios": {
+        "name": "iOS / iPadOS",
+        "caveat": "装完描述文件后还要手动去一趟：设置→通用→关于本机→证书信任设置，把这张证书的「完全信任」打开——这是苹果对所有用户新增证书的强制要求，装完不代表已经生效。"
+      },
+      "macos": {
+        "name": "macOS",
+        "caveat": "双击证书会打开钥匙串访问，同样要手动把它的信任设置改成「始终信任」，默认的「系统默认」不会生效。"
+      },
+      "windows": {
+        "name": "Windows",
+        "caveat": "双击证书进导入向导时，务必手动选到「受信任的根证书颁发机构」这个位置——选进「个人」的话装了也没用。"
+      },
+      "firefox": {
+        "name": "任意系统上的 Firefox",
+        "caveat": "Firefox 有自己独立的证书库，不读取系统信任链，得在 Firefox 设置里单独再导入一次这张证书，否则系统层面装好了，Firefox 里还是会报证书错误。"
+      }
+    },
+    "exchangesTitle": "解密的请求",
+    "exchangesEmpty": "尚未捕获请求 —— 在设备上把代理设为本页地址并浏览即可。",
+    "exTime": "时间",
+    "exMethod": "方法",
+    "exHost": "主机 / 路径",
+    "exStatus": "状态",
+    "exBytes": "请求/响应",
+    "exRequest": "请求",
+    "exResponse": "响应"
+  },
+  "worldMap": {
+    "title": "流量世界地图",
+    "counter": "已观察到 {{count}} 次外部连接",
+    "note": "旋转地球是浏览器自己的 GPU 实时渲染的（WebGL2），不是服务端 CUDA 那条流量色场管线——两块 GPU，两套画法。地图上的目的地坐标是真实 GeoIP 数据；网关自身没有一个真实地理坐标（不会为了这个去联网查询公网 IP），所以每条光弧的起点只是一个示意锚点，不代表你家的实际位置。",
+    "noWebgl": "这块浏览器不支持 WebGL2，画不出地球。",
+    "empty": "还没观察到可定位的外部连接。"
+  },
+  "map": {
+    "title": "世界地图 · 通信目的地",
+    "destinations": "{{count}} 个目的地",
+    "anchorNote": "起点为示意锚点 —— 网关没有真实地理坐标",
+    "noWebgl": "此浏览器不支持 WebGL2"
+  },
+  "geoAcc": {
+    "city": "● 精确（省市+运营商）",
+    "cityHint": "已加载 MaxMind City + ASN 数据库 —— 国家/省/市/运营商均准确。",
+    "country": "◐ 仅国家级",
+    "coarseHint": "未找到 City/ASN 数据库，定位为粗略近似。运行 ./scripts/geoip-setup.sh 获取准确的省/市/运营商。",
+    "builtin": "○ 粗略近似"
   }
 }

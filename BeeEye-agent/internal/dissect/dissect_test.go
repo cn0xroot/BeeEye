@@ -170,6 +170,35 @@ func TestDissectARP(t *testing.T) {
 	}
 }
 
+func TestDissectCoAP(t *testing.T) {
+	// GET /sensors/temp, token 0xABCD, MID 7 — hand-built per RFC 7252 §3
+	// since there is no CoAP frame builder in internal/live yet.
+	coap := []byte{
+		0x42, 0x01, 0x00, 0x07, // ver=1 type=CON tkl=2 | code=0.01 GET | MID=7
+		0xAB, 0xCD, // token
+		0xB7, 's', 'e', 'n', 's', 'o', 'r', 's', // Uri-Path delta=11 len=7
+		0x04, 't', 'e', 'm', 'p', // Uri-Path delta=0 len=4
+	}
+	f := live.BuildEthernet(gwMAC, devMAC, 0x0800,
+		live.BuildIPv4(devIP, dnsIP, 17, 64, 9, live.BuildUDP(51000, 5683, coap)))
+	r := New().Packet(frame(f))
+	if r.Proto != "CoAP" {
+		t.Fatalf("proto = %q, want CoAP", r.Proto)
+	}
+	if r.Info != "GET /sensors/temp" {
+		t.Errorf("Info = %q, want %q", r.Info, "GET /sensors/temp")
+	}
+	if got := r.FieldValues("coap.opt.uri_path"); len(got) != 2 || got[0] != "sensors" || got[1] != "temp" {
+		t.Errorf("coap.opt.uri_path = %v, want [sensors temp]", got)
+	}
+	if got := r.FieldValues("coap.token"); len(got) != 1 || got[0] != "abcd" {
+		t.Errorf("coap.token = %v, want [abcd]", got)
+	}
+	if got := r.FieldValues("coap.code"); len(got) != 1 || got[0] != "0.01" {
+		t.Errorf("coap.code = %v, want [0.01]", got)
+	}
+}
+
 func TestTruncatedPacketsDoNotPanic(t *testing.T) {
 	// A snaplen-truncated ClientHello is completely ordinary on a real capture.
 	hello := live.BuildTLSClientHello("example.com", []string{"h2"}, []uint16{0x1301})
@@ -184,6 +213,21 @@ func TestTruncatedPacketsDoNotPanic(t *testing.T) {
 				}
 			}()
 			New().Packet(frame(full[:n]))
+		}()
+	}
+
+	coap := []byte{0x42, 0x01, 0x00, 0x07, 0xAB, 0xCD,
+		0xB7, 's', 'e', 'n', 's', 'o', 'r', 's', 0x04, 't', 'e', 'm', 'p'}
+	fullCoAP := live.BuildEthernet(gwMAC, devMAC, 0x0800,
+		live.BuildIPv4(devIP, dnsIP, 17, 64, 10, live.BuildUDP(51000, 5683, coap)))
+	for n := 0; n <= len(fullCoAP); n++ {
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("panic dissecting a %d-byte truncated CoAP frame: %v", n, p)
+				}
+			}()
+			New().Packet(frame(fullCoAP[:n]))
 		}()
 	}
 }

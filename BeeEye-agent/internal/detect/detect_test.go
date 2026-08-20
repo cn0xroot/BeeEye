@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -113,3 +114,109 @@ func TestDNSAnomalyDGA(t *testing.T) {
 }
 
 func ip(prefix string, i int) string { return prefix + itoa(i) }
+
+// A device with a steady ~10KB/hour history at 03:00 that suddenly moves
+// 50MB in that same hour today must be flagged; a device whose today value
+// sits inside its normal range must not be.
+func TestBaselineFlagsVolumeOutlier(t *testing.T) {
+	e := testEngine()
+	now := time.Date(2026, 8, 19, 3, 30, 0, 0, time.UTC) // "now" is inside the 03:00 bucket
+	var conns []model.Connection
+	for d := 1; d <= 6; d++ {
+		day := time.Date(2026, 8, d, 3, 0, 0, 0, time.UTC)
+		bytes := int64(10 * 1024) // steady 10KB baseline
+		if d == 6 {
+			day = now // today's sample, in the current hour bucket
+			bytes = 50 * 1024 * 1024
+		}
+		conns = append(conns, model.Connection{MAC: "nas", DstIP: "192.168.1.1", TS: day, Bytes: bytes})
+	}
+	hits := e.Baseline(conns, now)
+	hit, ok := hits[Subject{MAC: "nas"}]
+	if !ok {
+		t.Fatal("expected a baseline outlier for nas at 03:00")
+	}
+	if hit.Hour != 3 {
+		t.Errorf("hour = %d, want 3", hit.Hour)
+	}
+	if hit.Z < e.Cfg.Baseline.ZThreshold {
+		t.Errorf("z = %v, want >= %v", hit.Z, e.Cfg.Baseline.ZThreshold)
+	}
+}
+
+func TestBaselineIgnoresNormalVariation(t *testing.T) {
+	e := testEngine()
+	now := time.Date(2026, 8, 19, 14, 15, 0, 0, time.UTC)
+	var conns []model.Connection
+	for d := 1; d <= 6; d++ {
+		day := time.Date(2026, 8, d, 14, 0, 0, 0, time.UTC)
+		bytes := int64(200*1024 + (d%3)*1024) // mild jitter around 200KB
+		if d == 6 {
+			day = now
+		}
+		conns = append(conns, model.Connection{MAC: "pc", DstIP: "192.168.1.1", TS: day, Bytes: bytes})
+	}
+	if hits := e.Baseline(conns, now); len(hits) != 0 {
+		t.Errorf("expected no baseline hit for ordinary variation, got %+v", hits)
+	}
+}
+
+func TestBaselineRequiresMinimumHistory(t *testing.T) {
+	e := testEngine()
+	now := time.Date(2026, 8, 19, 3, 0, 0, 0, time.UTC)
+	// Only two days of history — fewer than Cfg.Baseline.MinDays (5) — plus
+	// today's spike. Must not fire: not enough history to call it an outlier.
+	conns := []model.Connection{
+		{MAC: "cam", DstIP: "192.168.1.1", TS: time.Date(2026, 8, 17, 3, 0, 0, 0, time.UTC), Bytes: 1024},
+		{MAC: "cam", DstIP: "192.168.1.1", TS: time.Date(2026, 8, 18, 3, 0, 0, 0, time.UTC), Bytes: 1024},
+		{MAC: "cam", DstIP: "192.168.1.1", TS: now, Bytes: 50 * 1024 * 1024},
+	}
+	if hits := e.Baseline(conns, now); len(hits) != 0 {
+		t.Errorf("expected no hit with insufficient history, got %+v", hits)
+	}
+}
+
+func TestThreatIntelMatchIPCIDR(t *testing.T) {
+	_, cidr, err := net.ParseCIDR("5.42.92.0/23")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ti := ThreatIntel{
+		BadIPs:   map[string]bool{"45.13.34.7": true},
+		BadCIDRs: []*net.IPNet{cidr},
+	}
+	if m, ok := ti.MatchIP("45.13.34.7"); !ok || m != "45.13.34.7" {
+		t.Errorf("exact match = (%q, %v), want (45.13.34.7, true)", m, ok)
+	}
+	if m, ok := ti.MatchIP("5.42.93.10"); !ok || m != "5.42.92.0/23" {
+		t.Errorf("CIDR match = (%q, %v), want (5.42.92.0/23, true)", m, ok)
+	}
+	if _, ok := ti.MatchIP("8.8.8.8"); ok {
+		t.Error("8.8.8.8 should not match either the exact set or the CIDR range")
+	}
+	if _, ok := ti.MatchIP("not-an-ip"); ok {
+		t.Error("a malformed address must not match")
+	}
+}
+
+// A feed-sourced CIDR entry must trigger the same threat_intel signal as a
+// hand-injected exact IP.
+func TestThreatIntelSignalFromCIDR(t *testing.T) {
+	e := testEngine()
+	_, cidr, err := net.ParseCIDR("203.0.113.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Intel.BadCIDRs = []*net.IPNet{cidr}
+	conns := []model.Connection{{MAC: "pc", DstIP: "203.0.113.55", DstPort: 443, TS: time.Now()}}
+	events := e.Analyze(conns, nil, map[string]bool{"pc|203.0.113.55": true})
+	found := false
+	for _, ev := range events {
+		if ev.EventType == "threat_intel" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected a threat_intel event for a destination inside a blocklisted CIDR")
+	}
+}

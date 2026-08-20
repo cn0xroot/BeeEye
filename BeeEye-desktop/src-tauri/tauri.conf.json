@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "BeeEye-desktop",
+  "version": "0.1.0",
+  "identifier": "io.beeeye.desktop",
+  "build": {
+    "frontendDist": "dist-placeholder"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "蜂眼 BeeEye — 实时分析器",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "url": "index.html"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

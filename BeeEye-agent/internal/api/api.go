@@ -5,9 +5,11 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,14 +17,17 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"BeeEye/internal/analyze"
 	"BeeEye/internal/config"
 	"BeeEye/internal/detect"
 	"BeeEye/internal/geoip"
+	"BeeEye/internal/mitm"
 	"BeeEye/internal/model"
 	"BeeEye/internal/store"
+	"BeeEye/internal/tcapture"
 )
 
 type Server struct {
@@ -33,23 +38,56 @@ type Server struct {
 	// Data-source honesty (F43): what the overview is actually showing. Set by
 	// main once it knows whether the live capture opened or the simulator is
 	// standing in, so the UI can badge simulated data rather than passing it
-	// off as real.
-	srcLive  bool
-	srcIface string
-	srcName  string
+	// off as real. A hot-plug interface swap (F20) can call SetSource again
+	// from another goroutine after startup, so this is an atomic pointer to
+	// an immutable struct rather than three plain fields — otherwise a
+	// concurrent reader could see live=true paired with the previous iface.
+	src atomic.Pointer[sourceInfo]
+
+	// tcap serves F11 (on-demand targeted capture). nil until main wires one
+	// in via SetTargetedCapture — which only happens when a live pipeline is
+	// actually running, since a targeted capture has nothing to filter
+	// packets out of otherwise. Also swapped on every hot-plug interface
+	// change, hence the same atomic-pointer treatment as src.
+	tcap atomic.Pointer[tcapture.Manager]
+
+	// mitmProxy serves F45's endpoints. nil unless mitm.enabled is true in
+	// config, in which case main wires one in via SetMITM once the proxy is
+	// actually listening — the CA-download and status endpoints answer a
+	// clear "not enabled" error rather than a generic 404 when it's off.
+	mitmProxy atomic.Pointer[mitm.Proxy]
+}
+
+type sourceInfo struct {
+	live  bool
+	iface string
+	name  string
 }
 
 func New(st *store.Store, cfg *config.Config) *Server {
-	return &Server{st: st, cfg: cfg, reports: analyze.NewStore(10), srcName: "simulated"}
+	s := &Server{st: st, cfg: cfg, reports: analyze.NewStore(10)}
+	s.src.Store(&sourceInfo{name: "simulated"})
+	return s
 }
 
 // SetSource records whether the overview's data is a live capture or the
-// simulated scenario. Called once at startup.
+// simulated scenario. Called at startup, and again by the hot-plug
+// supervisor (F20) whenever the capture interface changes.
 func (s *Server) SetSource(live bool, iface, name string) {
-	s.srcLive = live
-	s.srcIface = iface
-	s.srcName = name
+	s.src.Store(&sourceInfo{live: live, iface: iface, name: name})
 }
+
+// SetTargetedCapture wires in the manager F11's on-demand capture endpoints
+// use. Called once at startup when a live pipeline exists, and again after
+// every hot-plug interface swap (F20) so the endpoints keep working against
+// whichever pipeline is currently running.
+func (s *Server) SetTargetedCapture(m *tcapture.Manager) { s.tcap.Store(m) }
+
+// SetMITM wires in the running F45 proxy once main has started it (only
+// happens when mitm.enabled is true in config). Never called otherwise, so
+// the mitm endpoints correctly answer "not enabled" rather than a nil
+// dereference.
+func (s *Server) SetMITM(p *mitm.Proxy) { s.mitmProxy.Store(p) }
 
 // Routes builds the HTTP handler (Go 1.22 pattern-based ServeMux, no router dep).
 func (s *Server) Routes() http.Handler {
@@ -68,15 +106,31 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/views/ip", s.ipView)
 	mux.HandleFunc("GET /api/views/protocol", s.protocolView)
 	mux.HandleFunc("GET /api/views/topn", s.topN)
+	mux.HandleFunc("GET /api/views/geopairs", s.geoPairs)
 	mux.HandleFunc("GET /api/timeseries", s.timeseries)
 	mux.HandleFunc("GET /api/export", s.export)
 	mux.HandleFunc("GET /api/geoip", s.geoipLookup)
+	mux.HandleFunc("GET /api/geoip/status", s.geoipStatus)
 
 	// Offline capture-file analysis.
 	mux.HandleFunc("POST /api/pcap/upload", s.pcapUpload)
 	mux.HandleFunc("GET /api/pcap", s.pcapList)
 	mux.HandleFunc("GET /api/pcap/{id}", s.pcapReport)
 	mux.HandleFunc("GET /api/pcap/{id}/files/{fid}", s.pcapFile)
+
+	// On-demand targeted capture (F11): a fresh, MAC-filtered pcap distinct
+	// from a snapshot of the rolling ring buffer.
+	mux.HandleFunc("POST /api/capture/targeted", s.startTargetedCapture)
+	mux.HandleFunc("GET /api/capture/targeted", s.listTargetedCaptures)
+	mux.HandleFunc("GET /api/capture/targeted/{id}", s.targetedCaptureStatus)
+	mux.HandleFunc("GET /api/capture/targeted/{id}/download", s.targetedCaptureDownload)
+
+	// Opt-in MITM decryption (F45) — off unless mitm.enabled is set.
+	mux.HandleFunc("GET /api/mitm/status", s.mitmStatus)
+	mux.HandleFunc("GET /api/mitm/ca.pem", s.mitmCA)
+	mux.HandleFunc("GET /api/mitm/ca.mobileconfig", s.mitmMobileConfig)
+	mux.HandleFunc("GET /api/mitm/exchanges", s.mitmExchanges)
+	mux.HandleFunc("GET /api/mitm/exchanges/{id}", s.mitmExchange)
 
 	// static frontend (SPA) — serve dist if built, else a hint page.
 	fs := s.spaHandler()
@@ -93,10 +147,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 // getSource tells the UI whether it is looking at real captured traffic or the
 // simulated scenario, so the overview can show an honest badge (F43).
 func (s *Server) getSource(w http.ResponseWriter, r *http.Request) {
+	src := s.src.Load()
 	writeJSON(w, map[string]any{
-		"live":   s.srcLive,
-		"iface":  s.srcIface,
-		"source": s.srcName, // "af_packet" | "simulated"
+		"live":   src.live,
+		"iface":  src.iface,
+		"source": src.name, // "af_packet" | "simulated"
 	})
 }
 
@@ -242,13 +297,40 @@ func (s *Server) dns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, recs)
 }
 
+// events lists risk events, enriched with the destination IP's domain and
+// geo (country/city/lat-lon) — the same enrichment connections/ipView
+// already carry, extended here so an alert row can show "what" and "where"
+// without the UI having to reach into the raw Detail blob itself. Not every
+// event has a destination: signals scored at the MAC level (fanout,
+// baseline_deviation, dns_anomaly, a threat-intel hit on a domain rather
+// than an IP) stamp dst_ip as "" in detect.Engine.score, and those rows are
+// enriched with nothing rather than a bogus 0,0 geo point.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	e, err := s.st.Events(atoiDefault(r.URL.Query().Get("limit"), 500))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, e)
+	type enriched struct {
+		model.Event
+		DstIP  string         `json:"dst_ip,omitempty"`
+		Geo    *model.GeoInfo `json:"geo,omitempty"`
+		Domain string         `json:"domain,omitempty"`
+	}
+	out := make([]enriched, 0, len(e))
+	for _, ev := range e {
+		row := enriched{Event: ev}
+		if ip, _ := ev.Detail["dst_ip"].(string); ip != "" {
+			row.DstIP = ip
+			geo := geoip.Lookup(ip)
+			row.Geo = &geo
+			if d, ok := s.st.DomainForIP(ip); ok {
+				row.Domain = d
+			}
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, out)
 }
 
 func (s *Server) ackEvent(w http.ResponseWriter, r *http.Request) {
@@ -258,6 +340,70 @@ func (s *Server) ackEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// GeoPair is one recent external connection reduced to what the world-map
+// view needs to draw a source→destination arc: nothing about the connection
+// itself, just where it went and roughly how big it was.
+type GeoPair struct {
+	DstIP   string    `json:"dst_ip"`
+	Lat     float64   `json:"lat"`
+	Lon     float64   `json:"lon"`
+	Country string    `json:"country"`
+	City    string    `json:"city"`
+	Domain  string    `json:"domain"`
+	Proto   string    `json:"proto"`
+	Bytes   int64     `json:"bytes"`
+	TS      time.Time `json:"ts"`
+}
+
+// geoPairs feeds the world-map / traffic-globe view (F32): the most recent
+// external connections with a resolvable geo point, newest first. Internal
+// (east-west) traffic and anything geoip can't place on a map (private/CGNAT
+// ranges, or a public IP the offline database has no coordinates for) are
+// left out — an arc to 0,0 would be worse than no arc. The client is
+// expected to poll this and diff against the newest ts it has already drawn,
+// so this endpoint stays a plain snapshot rather than a push stream.
+func (s *Server) geoPairs(w http.ResponseWriter, r *http.Request) {
+	limit := atoiDefault(r.URL.Query().Get("limit"), 150)
+	// Over-fetch: most rows on a home network are internal or already-seen
+	// repeat destinations, so asking the store for exactly `limit` would
+	// starve the response on a chatty LAN.
+	conns, err := s.st.Connections(store.ConnFilter{Limit: limit * 8})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out := make([]GeoPair, 0, limit)
+	for _, c := range conns {
+		if c.Internal || len(out) >= limit {
+			continue
+		}
+		geo := geoip.Lookup(c.DstIP)
+		if geo.Local || (geo.Lat == 0 && geo.Lon == 0) {
+			continue
+		}
+		gp := GeoPair{
+			DstIP: c.DstIP, Lat: geo.Lat, Lon: geo.Lon, Country: geo.Country, City: geo.City,
+			Proto: firstNonEmpty(c.AppProtocol, c.Proto), Bytes: c.Bytes, TS: c.TS,
+		}
+		if d, ok := s.st.DomainForIP(c.DstIP); ok {
+			gp.Domain = d
+		} else if c.SNI != "" {
+			gp.Domain = c.SNI
+		}
+		out = append(out, gp)
+	}
+	writeJSON(w, out)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // ipView aggregates connections by destination IP (F25).
@@ -398,6 +544,14 @@ func (s *Server) topN(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) geoipLookup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, geoip.Lookup(r.URL.Query().Get("ip")))
+}
+
+// geoipStatus reports whether geoip is running on a real MaxMind database and
+// what it can resolve (F22): city+ASN, country-only, or the built-in coarse
+// table. The overview UI uses this to tell an operator why locations are
+// approximate rather than leaving them to guess.
+func (s *Server) geoipStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, geoip.GetStatus())
 }
 
 // timeseries buckets traffic over time for the trend chart (F7). Series are
@@ -582,6 +736,176 @@ func (s *Server) pcapFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(f.Filename)+"\"")
 	_, _ = w.Write(f.Data)
+}
+
+// startTargetedCapture begins one F11 session: a fresh pcap file capturing
+// only frames touching the given MAC, for a bounded duration/byte budget.
+func (s *Server) startTargetedCapture(w http.ResponseWriter, r *http.Request) {
+	mgr := s.tcap.Load()
+	if mgr == nil {
+		writeErrStatus(w, http.StatusServiceUnavailable,
+			fmt.Errorf("targeted capture needs a running live-capture pipeline, which is not active right now"))
+		return
+	}
+	var req struct {
+		MAC       string `json:"mac"`
+		DurationS int    `json:"duration_s"`
+		MaxBytes  int64  `json:"max_bytes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrStatus(w, http.StatusBadRequest, fmt.Errorf("invalid JSON body: %w", err))
+		return
+	}
+	sess, err := mgr.Start(req.MAC, time.Duration(req.DurationS)*time.Second, req.MaxBytes)
+	if err != nil {
+		writeErrStatus(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, sess.Status())
+}
+
+func (s *Server) listTargetedCaptures(w http.ResponseWriter, r *http.Request) {
+	mgr := s.tcap.Load()
+	if mgr == nil {
+		writeJSON(w, []tcapture.Status{})
+		return
+	}
+	writeJSON(w, mgr.List())
+}
+
+func (s *Server) targetedCaptureStatus(w http.ResponseWriter, r *http.Request) {
+	mgr := s.tcap.Load()
+	if mgr == nil {
+		writeErrStatus(w, http.StatusNotFound, fmt.Errorf("no targeted-capture session %q", r.PathValue("id")))
+		return
+	}
+	sess, ok := mgr.Get(r.PathValue("id"))
+	if !ok {
+		writeErrStatus(w, http.StatusNotFound, fmt.Errorf("no targeted-capture session %q", r.PathValue("id")))
+		return
+	}
+	writeJSON(w, sess.Status())
+}
+
+func (s *Server) targetedCaptureDownload(w http.ResponseWriter, r *http.Request) {
+	mgr := s.tcap.Load()
+	if mgr == nil {
+		writeErrStatus(w, http.StatusNotFound, fmt.Errorf("no targeted-capture session %q", r.PathValue("id")))
+		return
+	}
+	sess, ok := mgr.Get(r.PathValue("id"))
+	if !ok {
+		writeErrStatus(w, http.StatusNotFound, fmt.Errorf("no targeted-capture session %q", r.PathValue("id")))
+		return
+	}
+	f, err := os.Open(sess.Path())
+	if err != nil {
+		writeErrStatus(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer f.Close()
+	name := strings.ReplaceAll(sess.MAC, ":", "-")
+	w.Header().Set("Content-Type", "application/vnd.tcpdump.pcap")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"beeeye-targeted-"+name+"-"+sess.ID+".pcap\"")
+	_, _ = io.Copy(w, f)
+}
+
+// mitmNotEnabled is the shared error for every F45 endpoint when main never
+// started a proxy — either mitm.enabled is false, or the config was never
+// changed from its shipped default.
+func mitmNotEnabled() error {
+	return fmt.Errorf("MITM decryption is not enabled — set mitm.enabled: true in config.yaml and restart")
+}
+
+func (s *Server) mitmStatus(w http.ResponseWriter, r *http.Request) {
+	p := s.mitmProxy.Load()
+	if p == nil {
+		writeJSON(w, map[string]any{"enabled": false})
+		return
+	}
+	writeJSON(w, map[string]any{
+		"enabled":     true,
+		"listen_addr": p.Addr(),
+		"fingerprint": p.CA().Fingerprint(),
+		"exchanges":   len(p.Exchanges(0)),
+	})
+}
+
+// mitmCA serves the root CA a phone or computer installs to start trusting
+// this proxy. application/x-x509-ca-cert is what makes iOS/Android offer to
+// install it as a trusted profile when this link is opened directly on the
+// device, rather than just downloading a file named ca.pem.
+func (s *Server) mitmCA(w http.ResponseWriter, r *http.Request) {
+	p := s.mitmProxy.Load()
+	if p == nil {
+		writeErrStatus(w, http.StatusServiceUnavailable, mitmNotEnabled())
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"beeeye-mitm-ca.pem\"")
+	_, _ = w.Write(p.CA().PEM())
+}
+
+// mitmMobileConfig serves the same CA wrapped as an Apple Configuration
+// Profile — a nicer install prompt on iOS/iPadOS/macOS (named, described)
+// than a bare PEM download, though the manual "enable full trust" step in
+// Settings afterward is unavoidable either way (see CA.MobileConfig's doc).
+func (s *Server) mitmMobileConfig(w http.ResponseWriter, r *http.Request) {
+	p := s.mitmProxy.Load()
+	if p == nil {
+		writeErrStatus(w, http.StatusServiceUnavailable, mitmNotEnabled())
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-apple-aspen-config")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"beeeye-mitm-ca.mobileconfig\"")
+	_, _ = w.Write(p.CA().MobileConfig())
+}
+
+func (s *Server) mitmExchanges(w http.ResponseWriter, r *http.Request) {
+	p := s.mitmProxy.Load()
+	if p == nil {
+		writeErrStatus(w, http.StatusServiceUnavailable, mitmNotEnabled())
+		return
+	}
+	limit := 200
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	writeJSON(w, p.Exchanges(limit))
+}
+
+// mitmExchange returns one decrypted request/response pair in full,
+// including bodies — base64-encoded explicitly (req_body_b64/resp_body_b64)
+// rather than left to encoding/json's implicit []byte→base64 behavior, the
+// same explicit-naming fix applied after that behavior once caused a blank
+// packet-detail panel elsewhere in this codebase (see CHANGELOG.zh-CN.md).
+func (s *Server) mitmExchange(w http.ResponseWriter, r *http.Request) {
+	p := s.mitmProxy.Load()
+	if p == nil {
+		writeErrStatus(w, http.StatusServiceUnavailable, mitmNotEnabled())
+		return
+	}
+	ex, ok := p.Exchange(r.PathValue("id"))
+	if !ok {
+		writeErrStatus(w, http.StatusNotFound, fmt.Errorf("no such exchange %q", r.PathValue("id")))
+		return
+	}
+	writeJSON(w, struct {
+		mitm.Summary
+		ReqHeaders  http.Header `json:"req_headers"`
+		ReqBodyB64  string      `json:"req_body_b64"`
+		RespHeaders http.Header `json:"resp_headers"`
+		RespBodyB64 string      `json:"resp_body_b64"`
+	}{
+		Summary:     ex.Summary(),
+		ReqHeaders:  ex.ReqHeaders,
+		ReqBodyB64:  base64.StdEncoding.EncodeToString(ex.ReqBody),
+		RespHeaders: ex.RespHeaders,
+		RespBodyB64: base64.StdEncoding.EncodeToString(ex.RespBody),
+	})
 }
 
 // spaHandler serves the built SPA and falls back to index.html for client routes.

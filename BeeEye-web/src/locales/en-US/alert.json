@@ -3,6 +3,8 @@
     "time": "Time",
     "device": "Device",
     "type": "Type",
+    "target": "Related to",
+    "geo": "Location",
     "severity": "Severity",
     "score": "Risk score",
     "signals": "Signals",

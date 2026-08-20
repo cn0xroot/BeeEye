@@ -255,8 +255,9 @@ export default function App() {
           onClearFilter={() => api.setFilter('').then(reload).catch(() => {})}
         />
 
-        {detail && <EndpointBar detail={detail} />}
-        <div className="lower">
+        <div className="detail-region">
+          {detail && <EndpointBar detail={detail} />}
+          <div className="lower">
           {detailError ? (
             <section className="pane">
               <div className="empty">
@@ -284,6 +285,7 @@ export default function App() {
               decryptRunning={decryptStatus?.running}
             />
           </ErrorBoundary>
+          </div>
         </div>
       </main>
 

@@ -54,11 +54,29 @@ func Lookup(ip string) model.GeoInfo {
 		return model.GeoInfo{IP: ip, Country: "LOCAL", Region: "Intranet", City: "Local", Local: true, Source: "builtin"}
 	}
 	// A real mmdb database wins when one is loaded: accurate country, province,
-	// city and network operator (F22).
+	// city and network operator (F22). A Country-tier database (as opposed to
+	// City-tier) has no Location record at all, so it resolves the country
+	// correctly but leaves Lat/Lon at zero — snap to that country's centroid
+	// rather than plotting nothing. Some bundled "Country" databases (Clash's,
+	// notably — see candidateCity's doc comment) also don't use real ISO
+	// codes at all (e.g. "GOOGLE" instead of "US", tagging by proxy-routing
+	// policy rather than geography); those won't match the centroid table, so
+	// fall back further to the same known-infrastructure-range table used
+	// when no mmdb is loaded at all.
+	v4 := parsed.To4()
 	if g, ok := lookupMMDB(parsed); ok {
+		if g.Lat == 0 && g.Lon == 0 {
+			if c, ok := countryCentroid[g.Country]; ok {
+				g.Lat, g.Lon = c[0], c[1]
+			} else if v4 != nil {
+				if lat, lon, ok := firstOctetLatLon(v4[0]); ok {
+					g.Lat, g.Lon = lat, lon
+				}
+			}
+		}
 		return g
 	}
-	if v4 := parsed.To4(); v4 != nil {
+	if v4 != nil {
 		if e, ok := firstOctetTable[int(v4[0])]; ok {
 			return model.GeoInfo{IP: ip, Country: e.country, Region: e.region, City: e.city,
 				ISP: e.isp, Lat: e.lat, Lon: e.lon, Source: "builtin"}
