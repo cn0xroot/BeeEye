@@ -1,0 +1,43 @@
+{
+  "columns": {
+    "mac": "MAC",
+    "ip": "IP",
+    "vendor": "Vendor",
+    "model": "Model (inferred)",
+    "category": "Category",
+    "hostname": "Hostname",
+    "iface": "Interface",
+    "accessType": "Access",
+    "firstSeen": "First seen",
+    "lastSeen": "Last seen",
+    "traffic": "Traffic",
+    "status": "Status"
+  },
+  "category": {
+    "unknown": "Unknown",
+    "camera": "Camera",
+    "lock": "Door lock",
+    "nas": "NAS",
+    "router": "Router",
+    "tv": "TV",
+    "phone": "Phone",
+    "laptop": "Computer",
+    "fridge": "Refrigerator",
+    "speaker": "Smart speaker"
+  },
+  "access": { "wireless": "Wireless", "wired": "Wired" },
+  "sensitivity": {
+    "3": "High — every connection logged",
+    "2": "Medium",
+    "1": "Low — aggregate statistics"
+  },
+  "isNew": "New device",
+  "isNewHelp": "This MAC has not been acknowledged by an administrator yet.",
+  "setCategory": "Reclassify",
+  "detail": {
+    "title": "Device detail",
+    "connections": "Connections",
+    "domains": "Domains queried",
+    "countries": "Destination countries"
+  }
+}

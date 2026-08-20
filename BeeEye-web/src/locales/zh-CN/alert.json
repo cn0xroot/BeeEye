@@ -1,0 +1,40 @@
+{
+  "columns": {
+    "time": "时间",
+    "device": "设备",
+    "type": "类型",
+    "severity": "等级",
+    "score": "风险分",
+    "signals": "命中信号",
+    "detail": "详情"
+  },
+  "severity": { "high": "高危", "medium": "中危", "low": "低危", "info": "提示" },
+  "eventType": {
+    "threat_intel": "命中已知恶意目标",
+    "lateral": "内网横向移动",
+    "fanout": "扫描 / 扇出行为",
+    "beacon": "疑似 C2 周期性回连",
+    "dns_anomaly": "DNS 行为异常",
+    "ja3_mismatch": "TLS 指纹异常",
+    "first_target": "首次访问该目标",
+    "geo_anomaly": "异常地理位置外联",
+    "offhours": "非常规时段活动",
+    "new_device": "新设备接入网络",
+    "anomaly": "异常"
+  },
+  "signal": {
+    "threat_intel": "威胁情报命中",
+    "lateral": "东西向流量",
+    "fanout": "扇出",
+    "beacon": "信标特征",
+    "dns_anomaly": "DNS 异常",
+    "ja3_mismatch": "JA3 不匹配",
+    "first_target": "首次出现的目标",
+    "geo_anomaly": "地域异常",
+    "offhours": "非常规时段"
+  },
+  "empty": "暂无告警",
+  "emptyHelp": "没有事件越过配置的风险阈值。",
+  "riskExplain": "风险分为所有命中信号的权重之和,阈值可在配置中调整。",
+  "weightsTitle": "信号权重"
+}

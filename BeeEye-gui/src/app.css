@@ -1,0 +1,565 @@
+/* Layout and components for the analyzer's three-pane view. */
+
+.app {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  height: 100%;
+}
+
+/* ------------------------------------------------------------------ toolbar */
+
+.toolbar {
+  padding: 10px 14px 12px;
+  background: linear-gradient(180deg, rgba(16, 64, 120, 0.28), rgba(11, 18, 32, 0.9));
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 8px;
+}
+
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-mark {
+  font-size: 22px;
+  filter: drop-shadow(0 0 10px rgba(34, 190, 220, 0.6));
+}
+.brand-name {
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  background: linear-gradient(90deg, var(--stop-2), var(--stop-3) 60%, var(--stop-4));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.brand-sub { color: var(--text-faint); font-size: 11px; }
+
+.toolbar-row, .filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.spacer { flex: 1; }
+
+.field { display: flex; align-items: center; gap: 6px; }
+.field-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+select, .filter-input {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 9px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+select:focus, .filter-input:focus {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px rgba(34, 190, 220, 0.12);
+}
+
+.filter-input {
+  flex: 1;
+  min-width: 260px;
+  font-family: var(--mono);
+}
+.filter-input.valid { border-color: rgba(12, 163, 12, 0.55); }
+.filter-input.invalid { border-color: rgba(208, 59, 59, 0.75); }
+
+.checkbox { display: flex; align-items: center; gap: 6px; color: var(--text-dim); cursor: pointer; }
+.checkbox.small { font-size: 11px; }
+.checkbox input { accent-color: var(--accent); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  text-decoration: none;
+  color: var(--text);
+  transition: background 120ms, border-color 120ms, transform 80ms;
+}
+.btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.tiny { padding: 3px 8px; font-size: 11px; }
+.glyph { font-size: 10px; }
+
+.btn-start {
+  background: linear-gradient(180deg, rgba(12, 163, 12, 0.35), rgba(12, 163, 12, 0.18));
+  border-color: rgba(12, 163, 12, 0.5);
+}
+.btn-stop {
+  background: linear-gradient(180deg, rgba(208, 59, 59, 0.35), rgba(208, 59, 59, 0.18));
+  border-color: rgba(208, 59, 59, 0.5);
+}
+
+.lang-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.lang-switch button {
+  background: transparent;
+  border: 0;
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+.lang-switch button.active { background: rgba(34, 190, 220, 0.18); color: var(--text); }
+
+.inline-error {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: #ffb4b4;
+  background: rgba(208, 59, 59, 0.12);
+  border: 1px solid rgba(208, 59, 59, 0.35);
+  border-radius: 6px;
+  padding: 5px 9px;
+}
+
+/* -------------------------------------------------------------- panes shell */
+
+.pane {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(16, 64, 120, 0.16);
+}
+.pane-head h2 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.pane-meta { margin-left: auto; color: var(--text-faint); font-family: var(--mono); font-size: 11px; }
+
+.panes {
+  display: grid;
+  grid-template-rows: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 12px;
+  min-height: 0;
+}
+.lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 10px;
+  min-height: 0;
+}
+
+.empty { padding: 28px 16px; text-align: center; color: var(--text-faint); }
+.empty-title { color: var(--text-dim); margin-bottom: 4px; }
+.empty-help { font-size: 12px; }
+
+/* --------------------------------------------------------------- traffic field */
+
+.pane-field { margin: 0 12px; }
+.field-body { display: grid; grid-template-columns: 78px minmax(0, 1fr); }
+.field-channels {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  border-right: 1px solid var(--border);
+}
+.field-channels li {
+  display: flex;
+  align-items: center;
+  padding-left: 8px;
+  border-bottom: 1px solid rgba(34, 190, 220, 0.07);
+}
+.field-channels li.hot { color: var(--accent); background: rgba(34, 190, 220, 0.07); }
+
+.field-canvas { position: relative; overflow: hidden; }
+.field-canvas img { display: block; width: 100%; height: auto; image-rendering: auto; }
+.field-idle {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  background: rgba(7, 12, 23, 0.55);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+.render-badge {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-family: var(--mono);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.render-badge.gpu {
+  border-color: rgba(150, 110, 245, 0.55);
+  color: #d9c9ff;
+  background: rgba(150, 110, 245, 0.14);
+}
+
+/* --------------------------------------------------------------- packet list */
+
+.table-wrap { overflow: auto; min-height: 0; flex: 1; }
+
+.packet-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.packet-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #0e1729;
+  color: var(--text-dim);
+  font-weight: 500;
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+/* Sortable headings. The whole cell is the hit target — a heading you have to
+ * aim at the six characters of its label is worse than no sorting at all. */
+.packet-table thead th.sortable { padding: 0; }
+.packet-table thead th.sortable button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 5px 8px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.packet-table thead th.sortable button:hover { color: var(--text); background: var(--bg-hover); }
+.packet-table thead th.sorted button { color: var(--accent); font-weight: 600; }
+/* Reserved width, so the row of headings does not shift sideways when the
+ * arrow appears on one of them. */
+.sort-mark { width: 8px; font-size: 9px; line-height: 1; }
+
+.packet-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid rgba(34, 190, 220, 0.05);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.packet-table tbody tr { cursor: pointer; }
+.packet-table tbody tr:hover { background: var(--bg-hover); }
+.packet-table tbody tr.selected { background: var(--bg-selected); }
+
+.c-no { width: 62px; color: var(--text-faint); }
+.c-time { width: 92px; color: var(--text-faint); }
+.c-addr { max-width: 210px; }
+.c-proto { width: 118px; }
+.c-len { width: 62px; text-align: right; }
+.c-info { max-width: 1px; width: 100%; color: var(--text-dim); }
+
+.cc {
+  margin-left: 6px;
+  font-size: 9.5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(34, 190, 220, 0.14);
+  color: var(--accent);
+}
+
+/* Protocol identity: a colour swatch beside the name, never colour alone. */
+.proto-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--proto-other);
+}
+tr.proto-tls   .proto-dot { background: var(--proto-tls); }
+tr.proto-http  .proto-dot { background: var(--proto-http); }
+tr.proto-dns   .proto-dot { background: var(--proto-dns); }
+tr.proto-mqtt  .proto-dot { background: var(--proto-mqtt); }
+tr.proto-arp   .proto-dot { background: var(--proto-arp); }
+tr.proto-icmp  .proto-dot { background: var(--proto-icmp); }
+tr.proto-tcp   .proto-dot { background: var(--proto-tcp); }
+tr.proto-other .proto-dot { background: var(--proto-other); }
+
+/* ---------------------------------------------------------------- field tree */
+
+.tree-wrap { overflow: auto; flex: 1; min-height: 0; padding: 4px 0; }
+.tree, .tree ul { list-style: none; margin: 0; padding: 0; }
+.tree-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: default;
+  border-left: 2px solid transparent;
+}
+.tree-row:hover { background: var(--bg-hover); border-left-color: var(--accent); }
+.tree-row.selected { background: var(--bg-selected); border-left-color: var(--accent-2); }
+.twisty { width: 10px; color: var(--text-faint); flex: none; }
+.tree-label { color: var(--text); }
+.tree-value { color: var(--accent); }
+.tree-field {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  opacity: 0.75;
+  padding-left: 12px;
+}
+
+.tls-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  background: rgba(150, 110, 245, 0.08);
+}
+.tls-strip b { color: var(--accent-2); font-weight: 600; margin-right: 5px; }
+.tls-strip code { color: var(--text); }
+
+.tree-actions {
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* ------------------------------------------------------------------ hex pane */
+
+.hex-wrap { overflow: auto; flex: 1; min-height: 0; }
+.hex {
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.hex td { padding: 0 10px; white-space: pre; vertical-align: top; }
+.hex-off { color: var(--text-faint); user-select: none; }
+.hex-bytes { color: var(--text-dim); }
+.hex-ascii { color: var(--text-faint); border-left: 1px solid var(--border); }
+.hex .hl {
+  background: rgba(34, 190, 220, 0.28);
+  color: #fff;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------- status bar */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 6px 14px;
+  border-top: 1px solid var(--border);
+  background: rgba(11, 18, 32, 0.92);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.statusbar b { color: var(--text); font-weight: 600; }
+.statusbar.simulated { background: rgba(250, 178, 25, 0.1); border-top-color: rgba(250, 178, 25, 0.4); }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+.dot.live {
+  background: var(--good);
+  box-shadow: 0 0 0 3px rgba(12, 163, 12, 0.18);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% { box-shadow: 0 0 0 6px rgba(12, 163, 12, 0.05); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot.live { animation: none; }
+}
+
+.st-primary { color: var(--text); font-weight: 600; }
+.st-warn { color: var(--warning); font-weight: 600; }
+.st-drop { color: var(--serious); }
+.st-dim { color: var(--text-faint); }
+.st-sep { flex: 1; }
+
+/* ------------------------------------------------------------------ narrow */
+
+@media (max-width: 1100px) {
+  .lower { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .c-time, .c-len { display: none; }
+  .field-body { grid-template-columns: 56px minmax(0, 1fr); }
+}
+
+/* ------------------------------------------------- protocol-layer colouring
+ *
+ * Three hues plus a neutral. Only three of the categorical slots stay
+ * separable for colour-vision-deficient readers with all of them on screen at
+ * once, so the link layer — framing rather than something anyone reasons
+ * about — takes a neutral grey rather than a fourth hue. Every coloured region
+ * is also labeled, so colour never carries identity by itself. */
+
+:root {
+  --role-link: #8b9ab5;      /* neutral: Ethernet / VLAN framing */
+  --role-net: #3987e5;       /* IPv4 / IPv6 / ARP */
+  --role-transport: #199e70; /* TCP / UDP / ICMP */
+  --role-app: #d95926;       /* DNS / TLS / HTTP / MQTT / SSDP / DHCP */
+}
+
+.tree-row.role-link      { --role: var(--role-link); }
+.tree-row.role-net       { --role: var(--role-net); }
+.tree-row.role-transport { --role: var(--role-transport); }
+.tree-row.role-app       { --role: var(--role-app); }
+
+.tree-row { border-left: 2px solid transparent; }
+.tree-row.layer-head {
+  border-left-color: var(--role);
+  background: color-mix(in srgb, var(--role) 9%, transparent);
+  font-weight: 600;
+}
+.tree-row.layer-head .tree-label { color: var(--role); }
+.tree-row:not(.layer-head) { border-left-color: color-mix(in srgb, var(--role) 35%, transparent); }
+.tree-row:hover { border-left-color: var(--role); }
+.tree-row.selected {
+  background: color-mix(in srgb, var(--role) 22%, var(--bg-selected));
+  border-left-color: var(--role);
+}
+
+.hex .by-link      { color: var(--role-link); }
+.hex .by-net       { color: var(--role-net); }
+.hex .by-transport { color: var(--role-transport); }
+.hex .by-app       { color: var(--role-app); }
+
+/* The selected field wins over its layer tint: it is the answer to the
+ * question the operator just asked. */
+.hex .hl {
+  background: rgba(255, 255, 255, 0.92);
+  color: #05121f;
+  border-radius: 2px;
+  font-weight: 700;
+}
+
+.layer-legend {
+  display: flex;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.layer-legend li { display: flex; align-items: center; gap: 4px; }
+.layer-legend .swatch { width: 7px; height: 7px; border-radius: 2px; background: currentColor; }
+.layer-legend .role-link      { color: var(--role-link); }
+.layer-legend .role-net       { color: var(--role-net); }
+.layer-legend .role-transport { color: var(--role-transport); }
+.layer-legend .role-app       { color: var(--role-app); }
+
+/* Address cell: the literal address stays primary — it is what filters match
+ * and what is unambiguous — with the learned name beneath it. */
+.c-addr .addr { display: block; }
+.c-addr .addr-name {
+  display: block;
+  font-size: 10.5px;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Count of packets buffered while auto-scroll is paused. It sits on the toggle
+ * so a paused, frozen list still tells the operator traffic is arriving. */
+.held-badge {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Decrypted-plaintext pane (F14, HTTPS decryption on by default). Sits beside
+ * the field tree and hex dump; shows the selected flow's process plaintext. */
+.pane-plaintext { min-width: 0; display: flex; flex-direction: column; }
+.decrypt-dot { font-size: 11px; color: var(--text-faint); }
+.decrypt-dot.on { color: var(--good); }
+.plaintext-body { overflow: auto; flex: 1; padding: 4px 0; }
+.plaintext-list { list-style: none; margin: 0; padding: 0; }
+.pt-item {
+  display: grid;
+  grid-template-columns: 16px auto;
+  gap: 2px 6px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.pt-item:hover { background: var(--bg-hover); }
+.pt-arrow { grid-row: span 2; color: var(--accent); font-weight: 700; }
+.pt-item.dir-read .pt-arrow { color: var(--accent-2); }
+.pt-meta { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono); }
+.pt-text {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 2.6em;
+  overflow: hidden;
+}
+.pt-text.full { max-height: none; color: var(--text); }
+
+/* Endpoint identity bar above the packet detail (F21/F22): domain + geo/ISP. */
+.endpoint-bar {
+  display: flex;
+  gap: 28px;
+  align-items: flex-start;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  flex-wrap: wrap;
+}
+.ep-col { display: flex; flex-direction: column; line-height: 1.35; }
+.ep-label { font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); }
+.ep-ip { font-family: var(--mono); font-size: 12px; color: var(--text); }
+.ep-domain { font-size: 11px; color: var(--accent-2); }
+.ep-geo { font-size: 12px; color: var(--text); }
+.ep-geo.dim { color: var(--text-faint); }
+.ep-isp { font-size: 10px; color: var(--text-faint); }

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BeeEye</title>
+    <meta name="description" content="BeeEye — home IoT gateway traffic analysis overview" />
+    <script>
+      // Apply the stored theme before first paint. Without this the page
+      // renders in the default theme for a frame and then snaps to the chosen
+      // one, which is jarring on every single load.
+      try {
+        var t = localStorage.getItem('BeeEye.theme') || 'system';
+        var resolved = t === 'system'
+          ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+          : t;
+        document.documentElement.setAttribute('data-theme', resolved);
+      } catch (e) { /* private mode: fall through to the default theme */ }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

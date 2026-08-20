@@ -1,0 +1,40 @@
+{
+  "columns": {
+    "time": "Time",
+    "device": "Device",
+    "type": "Type",
+    "severity": "Severity",
+    "score": "Risk score",
+    "signals": "Signals",
+    "detail": "Detail"
+  },
+  "severity": { "high": "High", "medium": "Medium", "low": "Low", "info": "Info" },
+  "eventType": {
+    "threat_intel": "Known-malicious destination",
+    "lateral": "Lateral movement inside the network",
+    "fanout": "Scanning / fan-out",
+    "beacon": "Suspected C2 beaconing",
+    "dns_anomaly": "Anomalous DNS behaviour",
+    "ja3_mismatch": "Unexpected TLS fingerprint",
+    "first_target": "First contact with this destination",
+    "geo_anomaly": "Unusual destination country",
+    "offhours": "Activity outside normal hours",
+    "new_device": "New device joined the network",
+    "anomaly": "Anomaly"
+  },
+  "signal": {
+    "threat_intel": "Threat intelligence hit",
+    "lateral": "East-west traffic",
+    "fanout": "Fan-out",
+    "beacon": "Beaconing",
+    "dns_anomaly": "DNS anomaly",
+    "ja3_mismatch": "JA3 mismatch",
+    "first_target": "First-seen destination",
+    "geo_anomaly": "Geographic anomaly",
+    "offhours": "Off-hours activity"
+  },
+  "empty": "No alerts",
+  "emptyHelp": "Nothing has crossed the configured risk threshold.",
+  "riskExplain": "Risk score is the sum of the weights of every signal that fired. Thresholds are configurable.",
+  "weightsTitle": "Signal weights"
+}
