@@ -1,0 +1,51 @@
+# ── Build artifacts ────────────────────────────────────────────────
+BeeEye-agent/bin/
+BeeEye-agent/bpf/*.o
+BeeEye-agent/internal/ebpf/*.o
+BeeEye-agent/internal/tlspeek/*.o
+BeeEye-agent/cuda/*.so
+
+# Generated from the running kernel's BTF — regenerate with `make vmlinux`
+BeeEye-agent/bpf/vmlinux.h
+
+# ── Frontend ───────────────────────────────────────────────────────
+node_modules/
+*/dist/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# ── Runtime state ──────────────────────────────────────────────────
+data/
+.run/
+
+# Saved / captured traffic and secrets (persistent capture, tls-decrypt.sh)
+*.pcap
+*.pcapng
+*.db
+*.db-shm
+*.db-wal
+keys-*.log
+SSLKEYLOGFILE
+/tmp/BeeEye/
+
+# ── GeoIP databases (licensed, not committed) ──────────────────────
+*.mmdb
+data/GeoLite2-*.mmdb
+data/GeoCN.mmdb
+data/Country.mmdb
+
+# ── Local / editor / OS ────────────────────────────────────────────
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+*.local
+.env
+.env.local
+
+# ── Go ─────────────────────────────────────────────────────────────
+*.test
+*.out
+coverage.txt

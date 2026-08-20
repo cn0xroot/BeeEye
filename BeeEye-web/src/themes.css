@@ -1,0 +1,344 @@
+/* 蜂眼 BeeEye — the six colour themes (program.md §3.8.2, F19).
+ *
+ * Every theme is a set of CSS custom properties and nothing else: no component
+ * reads a theme name, so adding a seventh theme means adding one block here.
+ *
+ * Two rules hold across all six:
+ *
+ *  1. Status colours keep their meaning. "Danger" must read as danger in every
+ *     theme — a theme is never allowed to make a critical alert less visible
+ *     than a warning.
+ *  2. Chart series come from the tokens below, never from colours written into
+ *     a chart component. Switching theme repaints the charts along with
+ *     everything else, which is the entire point.
+ *
+ * The series ramps are the validated categorical palette: fixed slot order,
+ * never cycled, checked for colour-vision-deficiency separation against each
+ * theme's own surface.
+ */
+
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  /* Paper beige. The surfaces, borders and amber accent are the palette used
+   * by ai.paper-insight.com's sepia theme: a warm cream ground rather than a
+   * blue-white one, which is what makes a long session on this page read as
+   * paper instead of as a screen.
+   *
+   * Two values are deliberately darker than that reference: --text-faint and
+   * the status hues. The reference uses #988a6f for faint text, which is
+   * 3.1:1 on this ground — fine for the decorative labels it uses it for, and
+   * not fine for the alert severities and axis labels this UI puts in it. */
+
+  --bg: #f9f3e5;
+  --bg-elev: #fdf9ee;
+  --surface: #fdf9ee;
+  --surface-2: #f4ecd9;
+  --border: #d9cdb3;
+  --border-strong: #bfae8c;
+
+  --text: #423a2c;           /* 10.1:1 on --bg */
+  --text-dim: #6b5f4a;       /*  5.7:1 */
+  --text-faint: #786c56;     /*  4.6:1 — AA, unlike the reference's #988a6f */
+
+  --accent: #b45309;         /* amber */
+  --accent-soft: #f3e2c7;
+  --on-accent: #fffdf7;
+
+  --success: #0f7a2e;
+  --warning: #a05a00;
+  --serious: #b4500f;
+  --danger: #b3261e;
+
+  --grid: #ece0c8;
+  --axis: #c9b898;
+
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+
+  --shadow: 0 1px 2px rgba(67, 53, 30, 0.07), 0 8px 24px rgba(67, 53, 30, 0.08);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #101216;
+  --bg-elev: #171a20;
+  --surface: #1c1f26;
+  --surface-2: #23272f;
+  --border: #2c313a;
+  --border-strong: #3d434e;
+
+  --text: #e9edf3;
+  --text-dim: #b3bcc9;
+  --text-faint: #8b95a4;
+
+  --accent: #22d3ee;         /* cyan */
+  --accent-soft: rgba(34, 211, 238, 0.14);
+  --on-accent: #06202a;
+
+  --success: #35c759;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --danger: #ff6b6b;
+
+  --grid: #262b34;
+  --axis: #3d434e;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+:root[data-theme='tech-blue'] {
+  color-scheme: dark;
+
+  --bg: #081428;
+  --bg-elev: #0e2242;
+  --surface: #142d52;
+  --surface-2: #1a3763;
+  --border: #23477a;
+  --border-strong: #35619e;
+
+  --text: #e6edf7;
+  --text-dim: #b2c5e0;
+  --text-faint: #8399bb;
+
+  --accent: #3ac6ff;
+  --accent-soft: rgba(58, 198, 255, 0.16);
+  --on-accent: #052033;
+
+  --success: #2ecc71;
+  --warning: #f5a623;
+  --serious: #ec835a;
+  --danger: #ff4d4f;
+
+  --grid: #1c3a66;
+  --axis: #35619e;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 30px rgba(2, 12, 26, 0.5);
+}
+
+:root[data-theme='warm-amber'] {
+  color-scheme: light;
+
+  --bg: #f3ece1;
+  --bg-elev: #fbf6ee;
+  --surface: #fffaf1;
+  --surface-2: #f1e8da;
+  --border: #ddd0bb;
+  --border-strong: #c2b096;
+
+  --text: #221b12;
+  --text-dim: #5a4a37;
+  --text-faint: #7a6852;
+
+  --accent: #a55200;         /* amber, darkened for contrast on cream */
+  --accent-soft: #f6e6d0;
+  --on-accent: #fffaf1;
+
+  --success: #0f7a2e;
+  --warning: #a86a00;
+  --serious: #b4500f;
+  --danger: #b3261e;
+
+  --grid: #e8dcc9;
+  --axis: #c2b096;
+
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+
+  --shadow: 0 1px 2px rgba(58, 42, 22, 0.07), 0 8px 24px rgba(58, 42, 22, 0.08);
+}
+
+:root[data-theme='forest-green'] {
+  color-scheme: dark;
+
+  --bg: #0c1e14;
+  --bg-elev: #12291c;
+  --surface: #17301f;
+  --surface-2: #1e3c28;
+  --border: #274a32;
+  --border-strong: #386a48;
+
+  --text: #e9f2e7;
+  --text-dim: #b6cbb5;
+  --text-faint: #8aa389;
+
+  --accent: #86d68a;
+  --accent-soft: rgba(134, 214, 138, 0.15);
+  --on-accent: #0a1c10;
+
+  --success: #4fd16a;
+  --warning: #f5a623;
+  --serious: #ec835a;
+  --danger: #ff6b6b;
+
+  --grid: #1f3d29;
+  --axis: #386a48;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px rgba(3, 15, 8, 0.45);
+}
+
+/* High contrast: pure black ground with high-saturation yellow text, held to
+ * WCAG 2.1 AA (≥4.5:1) as a hard acceptance criterion. Borders are solid and
+ * bright rather than tinted, because subtle separators are exactly what fails
+ * for a low-vision reader or in direct sunlight. */
+:root[data-theme='high-contrast'] {
+  color-scheme: dark;
+
+  --bg: #000000;
+  --bg-elev: #000000;
+  --surface: #000000;
+  --surface-2: #101010;
+  --border: #ffff00;
+  --border-strong: #ffffff;
+
+  --text: #ffff00;
+  --text-dim: #ffffff;
+  --text-faint: #d9d9d9;
+
+  --accent: #ffff00;
+  --accent-soft: #333300;
+  --on-accent: #000000;
+
+  --success: #00ff66;
+  --warning: #ffd400;
+  --serious: #ff9d3d;
+  --danger: #ff5252;
+
+  --grid: #4d4d00;
+  --axis: #ffff00;
+
+  --series-1: #4da3ff;
+  --series-2: #ff9d4d;
+  --series-3: #3ddba0;
+  --series-4: #ffd633;
+  --series-5: #ff8fbf;
+  --series-6: #7cff7c;
+  --series-7: #c9b6ff;
+  --series-8: #ff7a7a;
+
+  --shadow: none;
+}
+
+/* ── Midnight Neon ──────────────────────────────────────────────────────────
+ * A deliberately built dark theme: near-black ink-blue ground, a single
+ * electric-cyan accent with a magenta counter-accent, and high-chroma series
+ * colours that read as neon on the dark surface. Text is bright and cool. */
+:root[data-theme='midnight-neon'] {
+  color-scheme: dark;
+
+  --bg: #070912;
+  --bg-elev: #0c1020;
+  --surface: #10152a;
+  --surface-2: #161d38;
+  --border: #24305c;
+  --border-strong: #3a4d8f;
+
+  --text: #e8f0ff;
+  --text-dim: #9fb2e6;
+  --text-faint: #6b7cb5;
+
+  --accent: #22e0ff;          /* electric cyan */
+  --accent-soft: rgba(34, 224, 255, 0.14);
+  --on-accent: #04121a;
+
+  --success: #2fffb0;
+  --warning: #ffd23f;
+  --serious: #ff9d4d;
+  --danger: #ff4d80;
+
+  --grid: #1a2547;
+  --axis: #3a4d8f;
+
+  --series-1: #2ea8ff;
+  --series-2: #ff6a3d;
+  --series-3: #00e5a0;
+  --series-4: #ffcf33;
+  --series-5: #ff5db1;
+  --series-6: #7cff5e;
+  --series-7: #b98cff;
+  --series-8: #ff5470;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.6), 0 12px 40px rgba(10, 20, 60, 0.6);
+}
+
+/* ── Matrix ─────────────────────────────────────────────────────────────────
+ * Phosphor green on black — a single-hue terminal aesthetic. Status colours
+ * keep their meaning (danger stays red) so it never hides an alert. */
+:root[data-theme='matrix'] {
+  color-scheme: dark;
+
+  --bg: #000700;
+  --bg-elev: #020e02;
+  --surface: #041604;
+  --surface-2: #082108;
+  --border: #10420f;
+  --border-strong: #1d6b1c;
+
+  --text: #b6ffb0;
+  --text-dim: #56d84f;
+  --text-faint: #2f8f2c;
+
+  --accent: #35ff45;          /* phosphor green */
+  --accent-soft: rgba(53, 255, 69, 0.13);
+  --on-accent: #001400;
+
+  --success: #35ff45;
+  --warning: #d4ff3f;
+  --serious: #ff9d3d;
+  --danger: #ff5252;
+
+  --grid: #0c2e0b;
+  --axis: #1d6b1c;
+
+  --series-1: #35ff45;
+  --series-2: #b6ff3f;
+  --series-3: #3fffd2;
+  --series-4: #d4ff3f;
+  --series-5: #7cff9e;
+  --series-6: #4dff4d;
+  --series-7: #a0ff6e;
+  --series-8: #ff8f6e;
+
+  --shadow: 0 0 0 1px #0c2e0b, 0 8px 30px rgba(0, 40, 0, 0.5);
+}

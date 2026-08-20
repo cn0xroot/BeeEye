@@ -1,0 +1,45 @@
+# 蜂眼 BeeEye 运行配置 (program.md §3.4.5 / §3.11)
+# 所有阈值均可调,不在代码中硬编码。
+
+listen_addr: ":8080"
+db_path: "./data/BeeEye.db"
+web_dir: "./BeeEye-web/dist"
+
+# 采集接口:名称不与具体网卡硬编码耦合 (F16)。
+# mode: explicit = 只采集下方列出的接口;auto = 自动发现并按 exclude_patterns 排除 (F20)
+interfaces:
+  mode: explicit
+  explicit_list:
+    - name: wlan0
+      role: wifi_ap        # 无线接入 → access_type=wireless (F17)
+    - name: eth0
+      role: wan_uplink
+    # - name: wlx00c0ca9701f2   # USB 网卡等非标准命名同样支持
+    #   role: wifi_ap
+  auto_discover:
+    exclude_patterns:
+      - lo
+      - "docker*"
+      - "veth*"
+      - "br-*"
+
+# 检测引擎参数 (§3.11)
+detection:
+  beacon:
+    min_samples: 6        # N_min:少于该样本数不做信标判定
+    cv_threshold: 0.15    # 间隔变异系数阈值,越小越"规律"
+    min_interval_s: 10    # 低于此间隔视为流式传输,不算信标
+    max_interval_s: 3600  # 高于此间隔样本太稀疏,不判定
+    window_min: 120       # 滑动窗口长度(分钟)
+  risk_thresholds:        # 多信号加权评分分级 (§3.11.5)
+    high: 50
+    medium: 30
+    low: 15
+  auto_block: false       # F38 高危自动阻断,默认关闭,仅告警
+
+# 演示/开发模式:无 eBPF 内核时用内置模拟采集源生成场景数据。
+# 固定 seed → 可复现的测试数据集。
+simulate_seed: 42
+
+# 知名端口 → 服务名映射 (F24, §3.5.4)。留空则用内置默认表。
+port_service_map_file: "./config/port-service-map.yaml"

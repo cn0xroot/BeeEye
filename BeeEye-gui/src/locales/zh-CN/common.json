@@ -1,0 +1,167 @@
+{
+  "app": {
+    "title": "蜂眼 分析器",
+    "subtitle": "实时抓包与协议分析"
+  },
+  "toolbar": {
+    "interface": "网卡",
+    "start": "开始",
+    "stop": "停止",
+    "restart": "重启",
+    "filter": "显示过滤器",
+    "filterPlaceholder": "tcp.port == 443 && !mdns",
+    "apply": "应用",
+    "clear": "清空",
+    "promiscuous": "混杂模式",
+    "exportPcap": "导出 pcap",
+    "autoscroll": "自动滚动",
+    "autoscrollOn": "自动滚动:开",
+    "autoscrollOff": "自动滚动:关",
+    "autoscrollHeld": "暂停期间缓冲了 {{count}} 个新包 —— 恢复以查看"
+  },
+  "status": {
+    "captured": "已捕获",
+    "displayed": "已显示",
+    "dropped": "内核丢弃",
+    "evicted": "已淘汰",
+    "buffered": "缓存中",
+    "bytes": "字节数",
+    "source": "采集源",
+    "idle": "空闲",
+    "capturing": "抓包中",
+    "simulated": "模拟数据 — 非真实流量",
+    "simulatedHelp": "本机无法进行真实抓包,分析器正在回放合成流量。原因:{{reason}}",
+    "renderer": "颜色场",
+    "rendererCuda": "GPU(CUDA)",
+    "rendererCpu": "CPU"
+  },
+  "panes": {
+    "packets": "包列表",
+    "detail": "包详情",
+    "bytes": "字节",
+    "field": "流量场"
+  },
+  "columns": {
+    "no": "序号",
+    "time": "时间",
+    "source": "源地址",
+    "destination": "目标地址",
+    "protocol": "协议",
+    "length": "长度",
+    "info": "摘要",
+    "iface": "接口",
+    "country": "国家/地区",
+    "process": "进程",
+    "sortHint": "点击排序；再次点击反向，第三次恢复抓包顺序"
+  },
+  "empty": {
+    "noPackets": "尚无数据包",
+    "noPacketsHelp": "选择网卡后点击「开始」。",
+    "noSelection": "请选择一个数据包",
+    "noSelectionHelp": "此处显示协议字段树及其对应字节。",
+    "filteredOut": "没有数据包匹配当前显示过滤器"
+  },
+  "errors": {
+    "filterInvalid": "过滤器语法错误",
+    "startFailed": "无法开始抓包",
+    "detailGone": "该数据包已不在缓存中"
+  },
+  "actions": {
+    "language": "语言",
+    "copyField": "复制字段值",
+    "filterOnField": "按此字段过滤"
+  },
+  "legend": {
+    "protocols": "协议"
+  },
+  "presets": {
+    "title": "模板",
+    "hint": "选一个模板再改 —— 它们就是普通的显示过滤器表达式。",
+    "groups": {
+      "protocol": "按协议",
+      "address": "按地址",
+      "investigate": "排查场景",
+      "noise": "降噪"
+    },
+    "items": {
+      "tls": "TLS / HTTPS",
+      "dns": "DNS 与 mDNS",
+      "http": "明文 HTTP",
+      "mqtt": "MQTT",
+      "arp": "ARP",
+      "icmp": "ICMP / ping",
+      "dhcp": "DHCP",
+      "discovery": "设备发现广播",
+      "internal": "仅内网地址",
+      "external": "仅外网地址",
+      "eastWest": "东西向(设备之间)",
+      "oneHost": "指定单台主机",
+      "subnet": "指定网段",
+      "ipv6": "IPv6 流量",
+      "clientHello": "仅 TLS ClientHello",
+      "sniContains": "SNI 包含…",
+      "ja3": "匹配 JA3 指纹",
+      "nxdomain": "NXDOMAIN(疑似 DGA)",
+      "dnsQuery": "查询域名包含…",
+      "encryptedDns": "加密 DNS(853 端口)",
+      "synOnly": "连接尝试(仅 SYN)",
+      "resets": "连接被重置",
+      "plaintext": "明文协议",
+      "largeFrames": "大包(≥1400 字节)",
+      "nonStandardTls": "非标准端口上的 TLS",
+      "noDiscovery": "屏蔽发现类广播",
+      "noLocalChatter": "屏蔽本地例行流量",
+      "unicastOnly": "仅单播"
+    }
+  },
+  "process": {
+    "local": "本机进程",
+    "notLocal": "非本机",
+    "notLocalHelp": "该流量属于网络中的其他设备。数据包本身不携带进程身份,因此无法为它指认任何程序 —— 设备本身(MAC)已是能给出的最强身份。",
+    "side": "本机是{{side}}方"
+  },
+  "theme": {
+    "label": "外观",
+    "dark": "深色",
+    "light": "浅色",
+    "system": "跟随系统",
+    "midnight-neon": "午夜霓虹",
+    "matrix": "矩阵绿"
+  },
+  "names": {
+    "name": "名称",
+    "nameFrom": "来源:{{source}}",
+    "noName": "本次抓包中未观测到该地址的名称",
+    "anyIface": "全部网卡"
+  },
+  "plaintext": {
+    "title": "解密明文",
+    "on": "● 解密中",
+    "off": "○ 关闭",
+    "remoteTitle": "该流没有本机进程",
+    "remoteHelp": "HTTPS 解密只覆盖本网关上的进程。此流属于另一台设备，其 TLS 跑在它自己的硬件上。",
+    "none": "暂无 {{comm}} 的解密明文",
+    "noneHelp": "它可能用了 BeeEye 挂不上的库（如静态链接的 BoringSSL）。见 TLS-DECRYPT.md。"
+  },
+  "endpoint": {
+    "geo": "归属地",
+    "local": "内网"
+  },
+  "settings": {
+    "title": "外观",
+    "font": "字体",
+    "size": "字号",
+    "fonts": {
+      "system": "系统",
+      "mono": "科技等宽",
+      "rounded": "圆润",
+      "serif": "衬线"
+    },
+    "sizes": {
+      "s": "小",
+      "m": "中",
+      "l": "大",
+      "xl": "特大"
+    }
+  }
+}

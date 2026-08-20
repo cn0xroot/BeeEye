@@ -1,0 +1,167 @@
+{
+  "app": {
+    "title": "BeeEye Analyzer",
+    "subtitle": "Live capture & packet analysis"
+  },
+  "toolbar": {
+    "interface": "Interface",
+    "start": "Start",
+    "stop": "Stop",
+    "restart": "Restart",
+    "filter": "Display filter",
+    "filterPlaceholder": "tcp.port == 443 && !mdns",
+    "apply": "Apply",
+    "clear": "Clear",
+    "promiscuous": "Promiscuous",
+    "exportPcap": "Export pcap",
+    "autoscroll": "Auto-scroll",
+    "autoscrollOn": "Auto-scroll on",
+    "autoscrollOff": "Auto-scroll off",
+    "autoscrollHeld": "{{count}} new packets held — resume to see them"
+  },
+  "status": {
+    "captured": "Captured",
+    "displayed": "Displayed",
+    "dropped": "Kernel drops",
+    "evicted": "Evicted",
+    "buffered": "Buffered",
+    "bytes": "Bytes",
+    "source": "Source",
+    "idle": "Idle",
+    "capturing": "Capturing",
+    "simulated": "SIMULATED — not real traffic",
+    "simulatedHelp": "Real capture is unavailable on this host, so the analyzer is replaying a synthetic trace. Reason: {{reason}}",
+    "renderer": "Colour field",
+    "rendererCuda": "GPU (CUDA)",
+    "rendererCpu": "CPU"
+  },
+  "panes": {
+    "packets": "Packet list",
+    "detail": "Packet detail",
+    "bytes": "Bytes",
+    "field": "Traffic field"
+  },
+  "columns": {
+    "no": "No.",
+    "time": "Time",
+    "source": "Source",
+    "destination": "Destination",
+    "protocol": "Protocol",
+    "length": "Length",
+    "info": "Info",
+    "iface": "Interface",
+    "country": "Country",
+    "process": "Process",
+    "sortHint": "Click to sort; click again to reverse, once more for capture order"
+  },
+  "empty": {
+    "noPackets": "No packets yet",
+    "noPacketsHelp": "Choose an interface and press Start.",
+    "noSelection": "Select a packet",
+    "noSelectionHelp": "The protocol tree and its bytes appear here.",
+    "filteredOut": "No packets match the display filter"
+  },
+  "errors": {
+    "filterInvalid": "Invalid filter",
+    "startFailed": "Could not start capture",
+    "detailGone": "That packet is no longer buffered"
+  },
+  "actions": {
+    "language": "Language",
+    "copyField": "Copy value",
+    "filterOnField": "Filter on this field"
+  },
+  "legend": {
+    "protocols": "Protocols"
+  },
+  "presets": {
+    "title": "Templates",
+    "hint": "Pick a template, then edit it — these are ordinary display filters.",
+    "groups": {
+      "protocol": "By protocol",
+      "address": "By address",
+      "investigate": "Investigation",
+      "noise": "Cut the noise"
+    },
+    "items": {
+      "tls": "TLS / HTTPS",
+      "dns": "DNS and mDNS",
+      "http": "Plaintext HTTP",
+      "mqtt": "MQTT",
+      "arp": "ARP",
+      "icmp": "ICMP / ping",
+      "dhcp": "DHCP",
+      "discovery": "Discovery broadcasts",
+      "internal": "Intranet addresses only",
+      "external": "External addresses only",
+      "eastWest": "East-west (device to device)",
+      "oneHost": "One host",
+      "subnet": "One subnet",
+      "ipv6": "IPv6 traffic",
+      "clientHello": "TLS ClientHello only",
+      "sniContains": "SNI contains…",
+      "ja3": "Match a JA3 fingerprint",
+      "nxdomain": "NXDOMAIN (possible DGA)",
+      "dnsQuery": "Domain contains…",
+      "encryptedDns": "DNS over TLS (port 853)",
+      "synOnly": "Connection attempts (SYN, no ACK)",
+      "resets": "Connection resets",
+      "plaintext": "Plaintext protocols",
+      "largeFrames": "Large frames (≥1400 B)",
+      "nonStandardTls": "TLS on a non-standard port",
+      "noDiscovery": "Hide discovery chatter",
+      "noLocalChatter": "Hide local housekeeping",
+      "unicastOnly": "Unicast only"
+    }
+  },
+  "process": {
+    "local": "Local process",
+    "notLocal": "Not this host",
+    "notLocalHelp": "This flow belongs to another device on the network. A packet carries no process identity, so no program can be named for it — the device itself (MAC) is the strongest identity available.",
+    "side": "This host is the {{side}}"
+  },
+  "theme": {
+    "label": "Appearance",
+    "dark": "Dark",
+    "light": "Light",
+    "system": "System",
+    "midnight-neon": "Midnight Neon",
+    "matrix": "Matrix"
+  },
+  "names": {
+    "name": "Name",
+    "nameFrom": "learned from {{source}}",
+    "noName": "no name observed in this capture",
+    "anyIface": "all interfaces"
+  },
+  "plaintext": {
+    "title": "Decrypted plaintext",
+    "on": "● decrypting",
+    "off": "○ off",
+    "remoteTitle": "No local process for this flow",
+    "remoteHelp": "HTTPS decryption covers only processes on this gateway. This flow belongs to another device, whose TLS runs on its own hardware.",
+    "none": "No decrypted plaintext yet for {{comm}}",
+    "noneHelp": "It may use TLS 1.3 with a library BeeEye cannot hook (e.g. a statically-linked BoringSSL). See TLS-DECRYPT.md."
+  },
+  "endpoint": {
+    "geo": "Location",
+    "local": "Local network"
+  },
+  "settings": {
+    "title": "Appearance",
+    "font": "Font",
+    "size": "Size",
+    "fonts": {
+      "system": "System",
+      "mono": "Tech Mono",
+      "rounded": "Rounded",
+      "serif": "Serif"
+    },
+    "sizes": {
+      "s": "S",
+      "m": "M",
+      "l": "L",
+      "xl": "XL"
+    }
+  }
+}

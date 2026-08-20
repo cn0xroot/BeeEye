@@ -1,0 +1,27 @@
+# 端口 → 服务名映射表 (program.md §3.5.4, F24)
+# 维护为本地可配置表,便于按自己网络中的厂商私有端口补充,无需重新编译。
+80: HTTP
+443: HTTPS
+8080: HTTP-Alt
+9000: HTTP-Alt
+22: SSH
+23: Telnet
+53: DNS
+853: DoT
+123: NTP
+445: SMB
+3389: RDP
+554: RTSP
+1883: MQTT
+8883: MQTT-TLS
+5683: CoAP
+5684: CoAP-DTLS
+1900: SSDP
+5353: mDNS
+67: DHCP
+68: DHCP
+# 厂商私有端口示例(按需自行补充)
+37777: Dahua-DVR
+34567: XiongMai-DVR
+8000: Hikvision-SDK
+6668: Tuya-LAN
