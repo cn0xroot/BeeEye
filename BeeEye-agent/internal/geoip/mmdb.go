@@ -22,11 +22,47 @@ import (
 )
 
 type mmdb struct {
-	mu      sync.RWMutex
-	city    *geoip2.Reader // City or Country database
-	asn     *geoip2.Reader // ASN database (operator / organization)
-	cityHas bool           // true when the city DB actually carries city/subdivision
-	loaded  bool
+	mu       sync.RWMutex
+	city     *geoip2.Reader // City or Country database
+	asn      *geoip2.Reader // ASN database (operator / organization)
+	cityHas  bool           // true when the city DB actually carries city/subdivision
+	loaded   bool
+	cityPath string
+	asnPath  string
+}
+
+// Status reports what geoip is actually running on, so a caller (the API, a
+// setup script) can tell an operator "you have country-only, want city too?"
+// instead of silently returning coarse data with no way to know why.
+type Status struct {
+	Loaded   bool   `json:"loaded"`
+	CityPath string `json:"city_path,omitempty"`
+	HasCity  bool   `json:"has_city"` // city/subdivision names available
+	ASNPath  string `json:"asn_path,omitempty"`
+	HasASN   bool   `json:"has_asn"`  // operator/ASN available
+	Accuracy string `json:"accuracy"` // "city" | "country" | "builtin"
+}
+
+// GetStatus reports the current geoip configuration for display.
+func GetStatus() Status {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	st := Status{
+		Loaded:   db.loaded,
+		CityPath: db.cityPath,
+		HasCity:  db.city != nil && db.cityHas,
+		ASNPath:  db.asnPath,
+		HasASN:   db.asn != nil,
+	}
+	switch {
+	case st.HasCity:
+		st.Accuracy = "city"
+	case db.city != nil:
+		st.Accuracy = "country"
+	default:
+		st.Accuracy = "builtin"
+	}
+	return st
 }
 
 var db mmdb
@@ -77,6 +113,7 @@ func Load(cityPath, asnPath string, extra ...string) {
 	cityCands = append(cityCands, clashHomePaths()...)
 	if r, path := openFirst(cityCands); r != nil {
 		db.city = r
+		db.cityPath = path
 		md := r.Metadata()
 		// City databases have "City" in their type; a country-only file does not.
 		db.cityHas = md.DatabaseType != "" && containsFold(md.DatabaseType, "City")
@@ -89,6 +126,7 @@ func Load(cityPath, asnPath string, extra ...string) {
 	}
 	if r, path := openFirst(asnCands); r != nil {
 		db.asn = r
+		db.asnPath = path
 		log.Printf("geoip: loaded ASN database %s", path)
 	}
 

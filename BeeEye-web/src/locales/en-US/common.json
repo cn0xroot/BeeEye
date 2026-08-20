@@ -11,7 +11,8 @@
     "byProtocol": "By protocol",
     "dns": "DNS",
     "alerts": "Alerts",
-    "analysis": "Analysis"
+    "analysis": "Analysis",
+    "mitm": "Certificate & decryption"
   },
   "settings": {
     "language": "Language",
@@ -210,5 +211,74 @@
   "source": {
     "live": "● live · {{iface}}",
     "simulated": "⚠ simulated"
+  },
+  "mitm": {
+    "title": "Opt-in phone/computer decryption",
+    "intro": "Install a root certificate generated on this machine, point that device's HTTPS proxy at the address below, and you'll see that device's own plaintext traffic — the same usage model as Surge, Burp, or mitmproxy. A device that hasn't installed the cert fails to connect outright; it never falls back to plaintext silently.",
+    "disabledTitle": "Not turned on yet.",
+    "disabledBody": "Add this to config.yaml (or flip enabled to true) and restart the agent.",
+    "proxyAddress": "Proxy address",
+    "proxyAddressHint": "Put this in the device's Wi-Fi / HTTPS proxy settings",
+    "fingerprint": "Certificate fingerprint",
+    "fingerprintHint": "Check this against what the device shows after installing",
+    "exchanges": "Requests decrypted so far",
+    "downloadTitle": "Download the root certificate",
+    "downloadPem": "Download certificate (PEM)",
+    "downloadMobileConfig": "Download for iOS/macOS",
+    "downloadHint": "On an iPhone, iPad, or Mac, use the one on the right — the install prompt shows a real name and description instead of a stray filename. Android and Windows should use the one on the left.",
+    "platformTitle": "What installing the cert doesn't do by itself",
+    "platform": "Platform",
+    "platformCaveat": "What to watch for",
+    "platforms": {
+      "android": {
+        "name": "Android",
+        "caveat": "Settings → Install a certificate → CA certificate is all it takes, but Android 7+ trusts only system-preinstalled roots by default for apps targeting API 24+. A user-installed CA is ignored by anything that pins its own certs (banking apps, some social apps) — only the system browser and similarly unpinned apps get decrypted."
+      },
+      "ios": {
+        "name": "iOS / iPadOS",
+        "caveat": "After installing the profile, go to Settings → General → About → Certificate Trust Settings and switch on full trust for it by hand — Apple requires this extra step for every user-added root, and the profile can't skip it for you."
+      },
+      "macos": {
+        "name": "macOS",
+        "caveat": "Double-clicking the cert opens Keychain Access; you still have to manually set its trust to \"Always Trust\" — the default \"Use System Defaults\" does nothing."
+      },
+      "windows": {
+        "name": "Windows",
+        "caveat": "In the certificate import wizard, make sure to place it under \"Trusted Root Certification Authorities\" — dropping it into \"Personal\" installs it without it doing anything."
+      },
+      "firefox": {
+        "name": "Firefox, on any OS",
+        "caveat": "Firefox keeps its own certificate store and ignores the system one — import this CA separately in Firefox's own settings, or every HTTPS site will still show a certificate error there even after the OS trusts it."
+      }
+    },
+    "exchangesTitle": "Decrypted requests",
+    "exchangesEmpty": "No requests captured yet — configure a device to use this proxy and browse.",
+    "exTime": "Time",
+    "exMethod": "Method",
+    "exHost": "Host / path",
+    "exStatus": "Status",
+    "exBytes": "Req/Resp",
+    "exRequest": "Request",
+    "exResponse": "Response"
+  },
+  "worldMap": {
+    "title": "Traffic world map",
+    "counter": "{{count}} external connections observed",
+    "note": "The rotating globe is rendered live by your browser's own GPU (WebGL2) — a different GPU, and a different pipeline, than the CUDA traffic field on the server. Destination points are real GeoIP data; the gateway itself has no real coordinate here (it never phones out to look up its own public IP), so every arc's local end is a schematic anchor, not a claim about where your house is.",
+    "noWebgl": "This browser doesn't support WebGL2, so the globe can't render.",
+    "empty": "No locatable external connections observed yet."
+  },
+  "map": {
+    "title": "World map · destinations",
+    "destinations": "{{count}} destinations",
+    "anchorNote": "Origin is a schematic anchor — the gateway has no real geolocation",
+    "noWebgl": "WebGL2 is unavailable in this browser"
+  },
+  "geoAcc": {
+    "city": "● precise (city + operator)",
+    "cityHint": "A MaxMind City + ASN database is loaded — country, province, city and network operator are accurate.",
+    "country": "◐ country-only",
+    "coarseHint": "No City/ASN database found — locations are approximate. Run ./scripts/geoip-setup.sh for accurate province/city/operator.",
+    "builtin": "○ approximate"
   }
 }

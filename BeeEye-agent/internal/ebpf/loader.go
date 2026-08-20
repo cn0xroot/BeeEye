@@ -30,6 +30,7 @@ var bpfObject []byte
 const (
 	cfgFlowIntervalNS      uint32 = 0
 	cfgSensitiveIntervalNS uint32 = 1
+	cfgRawFrameMode        uint32 = 2
 )
 
 // Loader owns the loaded kernel program, its maps and every TCX attachment.
@@ -152,6 +153,28 @@ func (l *Loader) SetIntervals(ordinary, sensitive time.Duration) error {
 	return nil
 }
 
+// SetRawFrameMode switches the program between its two reporting styles:
+// off (default) is the selective, in-kernel-tiered reporting described at
+// the top of BeeEye.bpf.c; on makes every packet emit EVT_RAW_FRAME, a
+// whole-frame mirror, so the ring buffer can act as a live.Source (see
+// source.go) on par with AF_PACKET instead of feeding the aggregation this
+// package's other methods are for. The two modes are not meant to run
+// together — raw-frame mode bypasses device_stats/flow tracking entirely.
+func (l *Loader) SetRawFrameMode(enabled bool) error {
+	m := l.coll.Maps["cfg"]
+	if m == nil {
+		return errors.New("ebpf: cfg map missing")
+	}
+	var v uint64
+	if enabled {
+		v = 1
+	}
+	if err := m.Update(cfgRawFrameMode, v, ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("ebpf: set raw frame mode: %w", err)
+	}
+	return nil
+}
+
 // deviceKey mirrors `struct device_key` (6-byte MAC + 2 bytes of padding).
 type deviceKey struct {
 	MAC [6]byte
@@ -211,8 +234,16 @@ func (l *Loader) DeviceCounters() (map[string]deviceStat, error) {
 
 // Events streams decoded ringbuf records until the loader is closed. The
 // channel is closed when the reader stops, so callers can range over it.
+//
+// The buffer is generous (8192, not the smaller size an earlier version
+// used) because raw-frame mode (EVT_RAW_FRAME, SetRawFrameMode) turns this
+// into a mirror of every packet on the interface rather than the selective
+// handful of kinds the rest of this package emits — a burst of ordinary
+// traffic can legitimately produce thousands of events in a fraction of a
+// second, and this channel being the bottleneck would silently drop frames
+// a consumer never even got a chance to see.
 func (l *Loader) Events() <-chan *Event {
-	ch := make(chan *Event, 1024)
+	ch := make(chan *Event, 8192)
 	go func() {
 		defer close(ch)
 		for {

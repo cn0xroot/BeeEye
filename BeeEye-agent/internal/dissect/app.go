@@ -51,9 +51,7 @@ func dissectAppUDP(r *Result, b []byte, off int, sport, dport uint16) {
 		r.proto("ntp")
 		r.Info = "NTP"
 	case sport == 5683 || dport == 5683:
-		r.Proto = "CoAP"
-		r.proto("coap")
-		r.Info = "CoAP"
+		dissectCoAP(r, b, off)
 	default:
 		if svc := wellKnownService(sport, dport); svc != "" {
 			r.Proto = svc
@@ -105,7 +103,6 @@ func dissectDNS(r *Result, b []byte, off int, protoKey string) {
 
 	r.proto(protoKey)
 	r.Proto = strings.ToUpper(protoKey)
-	r.set("dns.id", strconv.Itoa(int(txid)))
 	r.set("dns.flags.response", boolStr(isResp))
 	r.set("dns.flags.rcode", strconv.Itoa(int(rcode)))
 
@@ -725,6 +722,219 @@ func dhcpMsgType(t uint8) string {
 		return n
 	}
 	return strconv.Itoa(int(t))
+}
+
+// ----------------------------------------------------------------------CoAP
+
+// dissectCoAP parses RFC 7252 §3: a 4-byte fixed header, an optional token, a
+// run of delta-encoded options terminated by 0xFF, and payload. IoT devices
+// (sensors, actuators) that don't speak MQTT/HTTP commonly speak this instead.
+func dissectCoAP(r *Result, b []byte, off int) {
+	p := b[off:]
+	r.proto("coap")
+	r.Proto = "CoAP"
+	if len(p) < 4 {
+		r.Info = "CoAP (truncated)"
+		return
+	}
+	ver := p[0] >> 6
+	typ := (p[0] >> 4) & 0x3
+	tkl := p[0] & 0x0F
+	code := p[1]
+	msgID := binary.BigEndian.Uint16(p[2:4])
+
+	n := node("Constrained Application Protocol", off, len(p))
+	r.leaf(n, "Version", "coap.version", strconv.Itoa(int(ver)), off, 1)
+	r.leaf(n, "Type", "coap.type", coapType(typ), off, 1)
+	r.leaf(n, "Code: "+coapCode(code), "coap.code", coapCodeStr(code), off+1, 1)
+	r.leaf(n, "Message ID", "coap.mid", strconv.Itoa(int(msgID)), off+2, 2)
+	r.set("coap.code", coapCodeStr(code))
+	r.set("coap.type", coapType(typ))
+
+	q := 4
+	var token string
+	if int(tkl) <= 8 && q+int(tkl) <= len(p) {
+		token = fmt.Sprintf("%x", p[q:q+int(tkl)])
+		if tkl > 0 {
+			r.leaf(n, "Token", "coap.token", token, off+q, int(tkl))
+			r.set("coap.token", token)
+		}
+		q += int(tkl)
+	}
+
+	// Options: each starts with a byte of (delta<<4)|length nibbles; 13/14
+	// mean "read one/two more extension bytes"; 15 in either nibble is
+	// reserved (option end marker only appears as the standalone 0xFF).
+	var uriPath []string
+	var uriQuery []string
+	optNum := 0
+	for q < len(p) && p[q] != 0xFF {
+		nibble := p[q]
+		deltaNib := int(nibble >> 4)
+		lenNib := int(nibble & 0x0F)
+		q++
+		delta, ok := coapExt(p, &q, deltaNib)
+		if !ok {
+			break
+		}
+		length, ok := coapExt(p, &q, lenNib)
+		if !ok || q+length > len(p) {
+			break
+		}
+		optNum += delta
+		val := p[q : q+length]
+		name := coapOptionName(optNum)
+		switch optNum {
+		case 11: // Uri-Path
+			uriPath = append(uriPath, string(val))
+			r.leaf(n, name, "coap.opt.uri_path", string(val), off+q, length)
+		case 15: // Uri-Query
+			uriQuery = append(uriQuery, string(val))
+			r.leaf(n, name, "coap.opt.uri_query", string(val), off+q, length)
+		case 12: // Content-Format
+			cf := 0
+			for _, bb := range val {
+				cf = cf<<8 | int(bb)
+			}
+			r.leaf(n, name, "coap.opt.content_format", coapContentFormat(cf), off+q, length)
+			r.set("coap.opt.content_format", coapContentFormat(cf))
+		case 6: // Observe
+			obs := 0
+			for _, bb := range val {
+				obs = obs<<8 | int(bb)
+			}
+			r.leaf(n, name, "coap.opt.observe", strconv.Itoa(obs), off+q, length)
+		case 3: // Uri-Host
+			r.leaf(n, name, "coap.opt.uri_host", string(val), off+q, length)
+			r.Domains = append(r.Domains, string(val))
+		default:
+			r.leaf(n, fmt.Sprintf("Option %d", optNum), "coap.opt.unknown", fmt.Sprintf("%d bytes", length), off+q, length)
+		}
+		q += length
+	}
+	if len(uriPath) > 0 {
+		path := "/" + strings.Join(uriPath, "/")
+		r.set("coap.opt.uri_path_full", path)
+		r.Info = coapCode(code) + " /" + strings.Join(uriPath, "/")
+		if len(uriQuery) > 0 {
+			r.Info += "?" + strings.Join(uriQuery, "&")
+		}
+	} else {
+		r.Info = coapCode(code)
+	}
+	if typ == 2 || typ == 3 { // ACK / RST carry the exchange's message ID, not a fresh request
+		r.Info += fmt.Sprintf(" MID:%d", msgID)
+	}
+	r.layer(n, "coap")
+}
+
+// coapExt resolves a 4-bit option delta/length nibble to its real value,
+// consuming 0, 1 or 2 extension bytes from p as RFC 7252 §3.1 specifies.
+func coapExt(p []byte, q *int, nibble int) (int, bool) {
+	switch nibble {
+	case 13:
+		if *q >= len(p) {
+			return 0, false
+		}
+		v := int(p[*q]) + 13
+		*q++
+		return v, true
+	case 14:
+		if *q+1 >= len(p) {
+			return 0, false
+		}
+		v := int(binary.BigEndian.Uint16(p[*q:*q+2])) + 269
+		*q += 2
+		return v, true
+	case 15:
+		return 0, false // reserved for the payload marker, not a valid option nibble
+	default:
+		return nibble, true
+	}
+}
+
+func coapType(t uint8) string {
+	switch t {
+	case 0:
+		return "Confirmable"
+	case 1:
+		return "Non-confirmable"
+	case 2:
+		return "Acknowledgement"
+	case 3:
+		return "Reset"
+	}
+	return strconv.Itoa(int(t))
+}
+
+// coapCodeStr renders the wire code as CoAP's own "class.detail" notation,
+// e.g. 0x01 -> "0.01", 0x45 -> "2.05".
+func coapCodeStr(c uint8) string {
+	return fmt.Sprintf("%d.%02d", c>>5, c&0x1F)
+}
+
+func coapCode(c uint8) string {
+	if c>>5 == 0 { // class 0: request methods
+		switch c {
+		case 1:
+			return "GET"
+		case 2:
+			return "POST"
+		case 3:
+			return "PUT"
+		case 4:
+			return "DELETE"
+		case 5:
+			return "FETCH"
+		case 6:
+			return "PATCH"
+		case 7:
+			return "iPATCH"
+		case 0:
+			return "Empty"
+		}
+		return coapCodeStr(c)
+	}
+	names := map[uint8]string{
+		65: "2.01 Created", 66: "2.02 Deleted", 67: "2.03 Valid", 68: "2.04 Changed",
+		69: "2.05 Content", 95: "2.31 Continue",
+		128: "4.00 Bad Request", 129: "4.01 Unauthorized", 130: "4.02 Bad Option",
+		131: "4.03 Forbidden", 132: "4.04 Not Found", 133: "4.05 Method Not Allowed",
+		140: "4.12 Precondition Failed", 141: "4.13 Request Entity Too Large",
+		143: "4.15 Unsupported Content-Format",
+		160: "5.00 Internal Server Error", 161: "5.01 Not Implemented",
+		162: "5.02 Bad Gateway", 163: "5.03 Service Unavailable",
+		164: "5.04 Gateway Timeout", 165: "5.05 Proxying Not Supported",
+	}
+	if n, ok := names[c]; ok {
+		return n
+	}
+	return coapCodeStr(c)
+}
+
+func coapOptionName(num int) string {
+	names := map[int]string{
+		1: "If-Match", 3: "Uri-Host", 4: "ETag", 5: "If-None-Match", 6: "Observe",
+		7: "Uri-Port", 8: "Location-Path", 11: "Uri-Path", 12: "Content-Format",
+		14: "Max-Age", 15: "Uri-Query", 17: "Accept", 20: "Location-Query",
+		35: "Proxy-Uri", 39: "Proxy-Scheme", 60: "Size1",
+	}
+	if n, ok := names[num]; ok {
+		return n
+	}
+	return fmt.Sprintf("Option %d", num)
+}
+
+func coapContentFormat(cf int) string {
+	names := map[int]string{
+		0: "text/plain", 40: "application/link-format", 41: "application/xml",
+		42: "application/octet-stream", 47: "application/exi", 50: "application/json",
+		60: "application/cbor",
+	}
+	if n, ok := names[cf]; ok {
+		return n
+	}
+	return strconv.Itoa(cf)
 }
 
 // ------------------------------------------------------------------ helpers

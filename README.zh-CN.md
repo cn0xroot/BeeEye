@@ -2,9 +2,21 @@
 
 **家庭 IoT 网关流量分析 —— 基于 eBPF 的设备指纹识别、协议解剖与入侵后行为检测。**
 
-[English](README.md) · [安装指南](INSTALL.zh-CN.md) · [使用手册](USAGE.md) · [架构说明](ARCHITECTURE.md) · [需求与设计](program.md) · [实现进度](PROGRESS.md) · [TLS 解密](TLS-DECRYPT.md) · [更新日志](CHANGELOG.zh-CN.md)
+[官网](https://www.beeeye.dev/) · [English](README.md) · [安装指南](INSTALL.zh-CN.md) · [使用手册](USAGE.md) · [架构说明](ARCHITECTURE.md) · [需求与设计](program.md) · [实现进度](PROGRESS.md) · [TLS 解密](TLS-DECRYPT.md) · [更新日志](CHANGELOG.zh-CN.md)
 
-BeeEye 跑在已经承担家庭网络路由的 Ubuntu 主机上。它把 eBPF 程序挂到 LAN 侧网卡上，识别每一台入网设备，并观察这些设备在和谁通信 —— 不解密任何流量，也不需要在任何一台摄像头、门锁或手机上安装 agent。
+BeeEye 跑在已经承担家庭网络路由的 Ubuntu 主机上。它把 eBPF 程序挂到 LAN 侧网卡上，识别每一台入网设备，并观察这些设备在和谁通信 —— 不需要在任何一台摄像头、门锁或手机上安装 agent，也不解密**它们**的流量（唯一有意的例外是网关自己的进程——默认本地解密，对其它设备则是用户自愿开启——见[隐私](#隐私)一节）。
+
+## 界面截图
+
+实时分析器：同一份实时抓包，在浅色/深色主题与中/英文之间切换，无需刷新页面：
+
+| 浅色 · English | 深色 · English |
+|---|---|
+| ![分析器 浅色主题 英文](PIC/analyzer-light-en.png) | ![分析器 深色主题 英文](PIC/analyzer-dark-en.png) |
+
+| 浅色 · 中文 | 深色 · 中文 |
+|---|---|
+| ![分析器 浅色主题 中文](PIC/analyzer-light-zh.png) | ![分析器 深色主题 中文](PIC/analyzer-dark-zh.png) |
 
 ---
 
@@ -199,3 +211,30 @@ make smoke          # 两个服务端到端
 **今天端到端可用的**：两个 UI、REST API、显示过滤器引擎、协议解剖器、检测引擎、pcap 导出、CUDA/CPU 色场 —— `scripts/smoke.sh` 检查其中 24 条路径，24 条全过。
 
 agent 已通过 AF_PACKET 实时抓包，仅在无抓包权限时回退到模拟场景（会标注）；把 eBPF ring buffer 接为更低开销的采集源是主要的后续采集任务（见上文提示）。
+
+---
+
+## 参考与致谢
+
+BeeEye 不是凭空而来 —— 设计上直接借鉴了下面几个项目，代码上则依赖下面这些开源库。
+
+**设计参考**
+
+- **[Wireshark](https://www.wireshark.org/)** —— 三窗格（包列表 / 协议字段树 / 十六进制视图）布局、`internal/dfilter` 实现的兼容子集显示过滤器语法、以及 JA3/TLS 字段命名，全部有意沿用 Wireshark 的习惯，让肌肉记忆能直接复用。
+- **[eCapture](https://github.com/gojue/ecapture)** —— `BeeEye-tlspeek`（F14）的 uprobe TLS 明文捕获设计跟随 eCapture 开创的思路（挂载到加密库的读写函数上，不做 MITM、不需要在目标上装证书）。它的模块清单同时也是 BeeEye 自身缺口的路线图：GoTLS、GnuTLS、NSS 覆盖，以及 pcap+keylog 合并导出，目前仍是待办（见 [PROGRESS.md](PROGRESS.md) F14/F45）——正因为 eCapture 已经证明这些都可行,才把它们列进了计划。两个项目的能力边界在哪里分岔（本项目只做网关本机、且是故意的）见 [TLS-DECRYPT.md](TLS-DECRYPT.md)。
+- **[Pcap-Analyzer](https://github.com/HatBoy/Pcap-Analyzer)** —— 离线分析视图（协议/会话方/会话统计、凭证提取、文件提取、攻击模式启发式检测）的功能形态，`internal/analyze` 与总览 UI 的「抓包分析」页签都仿照了它的思路。
+
+**依赖的开源库**
+
+| 库 | 用途 |
+|---|---|
+| [cilium/ebpf](https://github.com/cilium/ebpf) | 加载/挂载 eBPF CO-RE 程序、读取 ringbuf 的 Go 绑定 |
+| [modernc.org/sqlite](https://gitlab.com/cznic/sqlite) | 纯 Go 实现的 SQLite（无需 CGO），承载总览的存储层 |
+| [oschwald/geoip2-golang](https://github.com/oschwald/geoip2-golang) + [maxminddb-golang](https://github.com/oschwald/maxminddb-golang) | 读取 MaxMind 格式的 `.mmdb` GeoIP 数据库，完全离线 |
+| [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys) | 原始 AF_PACKET 套接字与 RTNETLINK 热插拔监听 —— 不依赖 libpcap，无需 CGO |
+| [gopkg.in/yaml.v3](https://github.com/go-yaml/yaml) | 解析 `config.yaml` / `port-service-map.yaml` |
+| [React](https://react.dev/) + [Vite](https://vitejs.dev/) | 两套前端 SPA |
+| [react-i18next](https://react.i18next.com/) / [i18next](https://www.i18next.com/) | 两套前端的中英文双语界面 |
+| [NVIDIA CUDA](https://developer.nvidia.com/cuda-toolkit) | 流量色场渲染的可选 GPU 路径 —— CPU 兜底与其逐位一致，且始终可用 |
+
+另外要感谢 **[Spamhaus](https://www.spamhaus.org/)** 提供 `internal/threatintel` 拉取的 DROP 威胁情报 CIDR 名单（F29），以及 **[MaxMind GeoLite2](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data)** 的数据库格式 —— 如果你在 `data/` 下放一份，地理定位会比内置的粗表更准确。

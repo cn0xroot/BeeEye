@@ -28,3 +28,33 @@ func TestLookupFallbackWithoutDB(t *testing.T) {
 		t.Error("expected an operator label for 8.8.8.8 in the built-in table")
 	}
 }
+
+// TestGetStatusReflectsAccuracy checks the three-way accuracy classification
+// GetStatus reports: builtin (nothing loaded), country-only, and city+ASN.
+// The overview UI reads this to explain why locations look coarse.
+func TestGetStatusReflectsAccuracy(t *testing.T) {
+	// Reset package state so this test does not depend on run order.
+	db = mmdb{}
+
+	st := GetStatus()
+	if st.Loaded {
+		t.Errorf("Loaded should be false before Load() is ever called, got %+v", st)
+	}
+	if st.Accuracy != "builtin" {
+		t.Errorf("Accuracy = %q, want builtin before any database is loaded", st.Accuracy)
+	}
+
+	// Load() always marks itself as having run, even when the explicit paths
+	// given do not exist — auto-discovery may still find something on this
+	// host (as it legitimately does here), which is why Loaded is checked
+	// unconditionally but Accuracy is not asserted against a specific value:
+	// what auto-discovery finds is host-dependent, not part of this contract.
+	Load("/nonexistent/City.mmdb", "/nonexistent/ASN.mmdb")
+	st = GetStatus()
+	if !st.Loaded {
+		t.Error("Loaded should be true once Load() has run, regardless of outcome")
+	}
+	if st.Accuracy != "builtin" && st.Accuracy != "country" && st.Accuracy != "city" {
+		t.Errorf("Accuracy = %q, want one of builtin/country/city", st.Accuracy)
+	}
+}

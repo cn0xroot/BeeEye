@@ -36,6 +36,31 @@ detection:
     medium: 30
     low: 15
   auto_block: false       # F38 高危自动阻断,默认关闭,仅告警
+  baseline:                # 设备行为基线建模 (F10),按设备+小时分桶学习历史流量分布
+    min_days: 5             # 该小时桶下至少见过这么多天历史才做离群判定,避免冷启动误报
+    z_threshold: 3.0        # 今天该小时流量与历史均值的标准差倍数,超过即判定离群
+    min_stddev_kb: 8        # 标准差下限(KB),给流量近乎恒定的设备兜底,避免除零/过度敏感
+
+# 威胁情报比对 (F29)。启用后拉取公开黑名单,与设备连接的目的 IP 比对,
+# 命中即产出 threat_intel 信号。全程离线缓存到 cache_dir,拉取失败时
+# 沿用上一次缓存,绝不阻塞抓包主流程。
+threat_intel:
+  enabled: false
+  feeds:
+    - spamhaus_drop       # Spamhaus DROP:被劫持/防弹主机网段,免注册
+  refresh_hours: 24
+  cache_dir: "./data/threatintel"
+
+# 手机/电脑端可选 TLS 解密 (F45)。类 Surge/Burp/mitmproxy 的使用模型:
+# 用户在自己的手机/电脑上主动装 BeeEye 生成的根证书、把该设备的 HTTPS
+# 代理指向 listen 这个端口,才会被解密;没装证书的设备(门锁、摄像头等
+# IoT 终端)连接会直接失败,不存在静默明文透传。默认关闭 —— 这是一条
+# 不同于其它任何功能的信任边界,需要显式打开。
+mitm:
+  enabled: false
+  listen: ":8443"          # CONNECT 代理监听地址
+  ca_dir: "./data/mitm"    # 根证书 ca.pem/ca.key 的存放目录,首次启动自动生成
+  max_log: 500              # 内存中保留的最近解密请求/响应条数,超出后淘汰最旧的
 
 # 演示/开发模式:无 eBPF 内核时用内置模拟采集源生成场景数据。
 # 固定 seed → 可复现的测试数据集。

@@ -145,13 +145,17 @@ func detectLibraries() error {
 		fmt.Println("no matching crypto library is currently mapped by any process")
 		return nil
 	}
-	fmt.Printf("%-3s  %-8s  %-10s  %s\n", "OK", "FAMILY", "PROCS", "PATH")
+	fmt.Printf("%-3s  %-8s  %-20s  %-10s  %s\n", "OK", "FAMILY", "VERSION", "PROCS", "PATH")
 	for _, l := range libs {
 		mark := "✗"
 		if l.Attachable {
 			mark = "✓"
 		}
-		fmt.Printf("%-3s  %-8s  %-10d  %s\n", mark, l.Family, l.Processes, l.Path)
+		ver := l.Version
+		if ver == "" {
+			ver = "(unknown)"
+		}
+		fmt.Printf("%-3s  %-8s  %-20s  %-10d  %s\n", mark, l.Family, ver, l.Processes, l.Path)
 		if l.Note != "" {
 			fmt.Printf("       %s\n", l.Note)
 		}

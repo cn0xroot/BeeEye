@@ -27,10 +27,14 @@ char LICENSE[] SEC("license") = "GPL";
 
 /* ---------------------------------------------------------------- maps */
 
-/* Event channel to userspace. RINGBUF is the 5.8+ recommendation (§3.2). */
+/* Event channel to userspace. RINGBUF is the 5.8+ recommendation (§3.2).
+ * 16 MiB, not 4: EVT_RAW_FRAME (raw-frame mode) grew struct BeeEye_event to
+ * ~1.6 KiB per record (PAYLOAD_MAX now covers a full Ethernet frame, not just
+ * a protocol header), so the old 4 MiB would buffer noticeably fewer packets
+ * during a userspace stall. */
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 4 << 20); /* 4 MiB */
+	__uint(max_entries, 16 << 20); /* 16 MiB */
 } events SEC(".maps");
 
 /* device MAC → tiering state. Userspace writes `category` back after
@@ -148,20 +152,32 @@ static __always_inline struct BeeEye_event *scratch_event(void)
 	return bpf_map_lookup_elem(&scratch, &zero);
 }
 
-/* emit copies the staged event into the ringbuf. Only the bytes actually used
- * by the payload are shipped, so a 40-byte DNS query does not cost 512. */
+/* emit copies the staged event into the ringbuf. Userspace reads payload_len
+ * to know how many of the payload bytes are meaningful; the rest of the
+ * reservation is shipped regardless (a constant reservation size is what
+ * bpf_ringbuf_reserve needs), so a 40-byte DNS query still costs a full
+ * record — bounded, and the ringbuf is 16 MiB.
+ *
+ * The copy itself is a manually unrolled 8-byte word loop rather than one
+ * __builtin_memcpy(out, ev, sizeof(*ev)): clang for the BPF target refuses to
+ * inline-expand a memcpy this large (sizeof(struct BeeEye_event) grew past
+ * whatever its threshold is once PAYLOAD_MAX covers a whole Ethernet frame —
+ * see BeeEye_events.h) and there is no libc memcpy symbol to call out to.
+ * A fully unrolled, fixed-trip-count word loop compiles to plain sequential
+ * loads/stores instead, which has never had this limit. */
+_Static_assert(sizeof(struct BeeEye_event) % 8 == 0,
+	       "emit()'s word-copy loop assumes 8-byte alignment");
+
 static __always_inline void emit(struct BeeEye_event *ev)
 {
-	__u32 plen = ev->payload_len;
-	if (plen > PAYLOAD_MAX)
-		plen = PAYLOAD_MAX;
-	/* Ringbuf reservations must also be a constant size; ship the whole
-	 * struct and let userspace read payload_len. The cost is bounded and
-	 * the ringbuf is 4 MiB. */
 	struct BeeEye_event *out = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
 	if (!out)
 		return;
-	__builtin_memcpy(out, ev, sizeof(*ev));
+	const __u64 *src = (const __u64 *)ev;
+	__u64 *dst = (__u64 *)out;
+#pragma unroll
+	for (__u32 i = 0; i < sizeof(*ev) / 8; i++)
+		dst[i] = src[i];
 	bpf_ringbuf_submit(out, 0);
 }
 
@@ -208,7 +224,14 @@ static __always_inline int handle(struct __sk_buff *skb, __u8 dir)
 	struct BeeEye_event *ev = scratch_event();
 	if (!ev)
 		return TC_ACT_OK;
-	__builtin_memset(ev, 0, sizeof(*ev));
+	/* Only the header needs zeroing, not the 1536-byte payload array: every
+	 * path that emits an event either sets payload_len itself (a field
+	 * inside this zeroed header region) via load_payload's return value, or
+	 * leaves it at this zero, and every reader trusts payload_len rather
+	 * than assuming the array is clean past it. Zeroing the whole struct
+	 * hits the same "clang won't inline a memset this large" wall emit()'s
+	 * comment explains for memcpy. */
+	__builtin_memset(ev, 0, __builtin_offsetof(struct BeeEye_event, payload));
 
 	__u64 now = bpf_ktime_get_ns();
 	__u32 off = 0;
@@ -244,6 +267,36 @@ static __always_inline int handle(struct __sk_buff *skb, __u8 dir)
 	ev->dir = dir;
 	ev->pkt_len = skb->len;
 	ev->eth_proto = h_proto;
+
+	/* Raw-frame mode (internal/ebpf/source.go): mirror the whole frame,
+	 * verbatim from byte 0 (not `off`, which has already walked past
+	 * L2/VLAN), and skip every protocol-specific branch below entirely —
+	 * userspace's dissector does that work itself when replaying these
+	 * frames, exactly as it does for AF_PACKET. This intentionally comes
+	 * before track_device: in this mode userspace re-derives device
+	 * identity from the raw frame the same way the AF_PACKET path does,
+	 * so the in-kernel device_stats/NEWDEV bookkeeping below is not this
+	 * mode's job. */
+	if (cfg_get(CFG_RAW_FRAME_MODE, 0)) {
+		ev->kind = EVT_RAW_FRAME;
+		/* load_payload's cascade steps down through a handful of widely
+		 * spaced constants (1536/384/256/.../8), which is fine for the
+		 * selective kinds below — a short DNS/TLS payload only ever needs
+		 * its first few hundred bytes. It is wrong here: a 63-byte frame
+		 * landing between the 48 and 64 steps would lose 15 bytes for no
+		 * reason, which is exactly the gap between "SNI extraction" and
+		 * "a faithful frame mirror". A clamped, exact-length load — the
+		 * verifier can prove this one in-bounds because len's value range
+		 * is tracked down to [0, PAYLOAD_MAX] by the two comparisons
+		 * below — copies precisely min(skb->len, PAYLOAD_MAX) instead. */
+		__u32 len = skb->len;
+		if (len > PAYLOAD_MAX)
+			len = PAYLOAD_MAX;
+		if (len > 0 && bpf_skb_load_bytes(skb, 0, ev->payload, len) == 0)
+			ev->payload_len = len;
+		emit(ev);
+		return TC_ACT_OK;
+	}
 
 	/* The device is whichever side is on the LAN: on ingress the source
 	 * MAC is the device, on egress the destination MAC is (§3.4.1 note on

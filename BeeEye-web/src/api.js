@@ -40,6 +40,7 @@ export function toQuery(filter = {}, extra = {}) {
 export const api = {
   health: () => get('/api/health'),
   config: () => get('/api/config'),
+  geoipStatus: () => get('/api/geoip/status'),
   source: () => get('/api/source'),
   summary: () => get('/api/summary'),
   devices: () => get('/api/devices'),
@@ -58,6 +59,14 @@ export const api = {
     get(`/api/timeseries?${toQuery(filter, { bucket, split })}`),
 
   exportURL: (filter, format) => `/api/export?${toQuery(filter, { format })}`,
+
+  mitmStatus: () => get('/api/mitm/status'),
+  mitmCAUrl: () => '/api/mitm/ca.pem',
+  mitmMobileConfigUrl: () => '/api/mitm/ca.mobileconfig',
+  mitmExchanges: (limit = 100) => get(`/api/mitm/exchanges?limit=${limit}`),
+  mitmExchange: (id) => get(`/api/mitm/exchanges/${encodeURIComponent(id)}`),
+
+  geoPairs: (limit = 150) => get(`/api/views/geopairs?limit=${limit}`),
 }
 
 export function formatBytes(n) {

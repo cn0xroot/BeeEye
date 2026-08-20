@@ -1,10 +1,11 @@
 # 蜂眼 BeeEye — 安装与使用手册
 
-> 本手册覆盖安装、运行、两个 UI 的日常使用，以及 TLS 明文解密。
+> 本手册覆盖安装、运行、两个 UI 的日常使用、TLS 明文解密（网关自身进程默认自动解密 + 用户自愿的手机/电脑 MITM）、GeoIP 精确定位与外观自定义。
+> 官网：https://www.beeeye.dev/ · English: [USAGE.en.md](USAGE.en.md)
 > 需求与设计见 [program.md](program.md)，架构见 [ARCHITECTURE.md](ARCHITECTURE.md)，进度见 [PROGRESS.md](PROGRESS.md)。
 > English README: [README.md](README.md) · 中文 README: [README.zh-CN.md](README.zh-CN.md)
 
-**最后更新**：2026-08-19
+**最后更新**：2026-08-20
 
 ---
 
@@ -18,7 +19,13 @@
 6. [总览 UI（:8080）用法](#6-总览-ui8080用法)
 7. [实时分析器（:8081）用法](#7-实时分析器8081用法)
 8. [显示过滤器语法](#8-显示过滤器语法)
-9. [TLS 明文解密（BeeEye-tlspeek）](#9-tls-明文解密beeeye-tlspeek)
+9. [TLS 明文解密](#9-tls-明文解密)
+   - [9.1 分析器内置解密 —— 默认开启](#91-分析器内置解密--默认开启)
+   - [9.2 加密库检测](#92-加密库检测)
+   - [9.3 独立命令行工具](#93-独立命令行工具beeeye-tlspeek)
+   - [9.4 解密 Chrome / AdsPower](#94-解密-chrome--adspowersslkeylogfile-路径)
+   - [9.5 手机/电脑可选 MITM 解密](#95-手机--电脑可选-mitm-解密用户自愿)
+   - [9.6 离线数据包导入分析](#96-离线数据包导入分析)
 10. [开发模式与热更新](#10-开发模式与热更新)
 11. [故障排查](#11-故障排查)
 
@@ -165,6 +172,28 @@ port_service_map_file: "./config/port-service-map.yaml"
 
 > **务必修改** `interfaces.explicit_list` 里的网卡名 —— 默认写的是 `wlan0` / `eth0`，用 `ip link` 查你本机真实网卡（如 `wlp9s0`）。挂 **LAN 侧**而非 WAN 侧：经过 NAT 后设备级身份就没了。
 
+### 5.1 GeoIP 定位精度
+
+默认用内置的粗略首字节表（只到国家级近似）。总览 **By IP** 页表头有一个精度徽章：
+
+| 徽章 | 含义 |
+|---|---|
+| ● 精确（省市+运营商） | 已装 GeoLite2-City + ASN，国家/省/市/运营商全部准确 |
+| ◐ 仅国家级 | 只有 country-only 库（如 Clash 的 `Country.mmdb`），无省市 |
+| ○ 粗略近似 | 未找到任何 mmdb，用内置表 |
+
+**升级到精确定位**：
+
+```bash
+./scripts/geoip-setup.sh status                    # 看当前用的是哪个库
+./scripts/geoip-setup.sh fetch <MAXMIND_LICENSE_KEY>  # 下载 GeoLite2-City + ASN 到 ./data
+./start.sh restart
+```
+
+License key 免费申请：https://www.maxmind.com/en/geolite2/signup 。下载数据库文件本身不违反隐私要求——一旦文件落地，之后的每次查询都是 100% 本地，绝不会把访问过的 IP 逐个发到 MaxMind 或任何第三方。这一步完全可选，不装也能正常使用 BeeEye。
+
+程序也会自动发现 `./data/`、`/usr/share/GeoIP/` 以及 Clash 的 `Country.mmdb`，无需手动指定路径。查看当前状态：`curl http://127.0.0.1:8080/api/geoip/status`。
+
 ---
 
 ## 6. 总览 UI（:8080）用法
@@ -179,10 +208,17 @@ port_service_map_file: "./config/port-service-map.yaml"
 | **By IP 按 IP** | 以 IP 为中心聚合：域名、地理、涉及设备、协议、端口、字节数（F25） |
 | **By protocol 按协议** | 以协议为中心聚合（F26） |
 | **DNS** | DNS 查询记录与域名映射（F21） |
+| **Analysis 抓包分析** | 离线导入 pcap 文件做取证分析，见 [§9.6](#96-离线数据包导入分析) |
+| **Certificate & decryption 证书与解密** | 用户自愿的手机/电脑 MITM 解密面板，见 [§9.5](#95-手机--电脑可选-mitm-解密用户自愿) |
 | **Alerts 告警** | 风险事件，按严重度分级；页签上的红色数字是高危事件数 |
 
 **顶栏控件**：
-- **日 / 月按钮** —— 浅色（米黄纸感）/ 深色主题切换。跟随系统时会高亮当前实际生效的一侧。
+- **日 / 月按钮** —— 浅色（米黄纸感）/ 深色主题快速切换。跟随系统时会高亮当前实际生效的一侧。
+- **⚙ 设置面板** —— 点齿轮图标展开完整外观设置：
+  - **主题**：9 个可选，每个色板实时预览自己的配色（米黄纸感、深邃黑、**午夜霓虹**、**矩阵绿**、科技蓝、暖橙护眼、森绿静谧、跟随系统、高对比无障碍）
+  - **字体**：系统 / 科技等宽（Tech Mono）/ 圆润 / 衬线，四个选项各自用该字体渲染按钮文字，选之前就能看到效果
+  - **字号**：S / M / L / XL，整页缩放（含图标、间距）
+  三项均持久化在浏览器本地，刷新不丢。分析器（:8081）有一套独立但同构的设置面板，两边主题/字体/字号各自记忆，互不影响。
 - **EN / 中文** —— 语言即时切换，不刷新页面。
 
 ---
@@ -262,31 +298,75 @@ dns.flags.rcode == 3 || (tcp.flags.syn == 1 && tcp.flags.ack == 0)
 
 ---
 
-## 9. TLS 明文解密（BeeEye-tlspeek）
+## 9. TLS 明文解密
 
 > 参考 [gojue/ecapture](https://github.com/gojue/ecapture) 的 uprobe 方案。完整设计与边界见 [TLS-DECRYPT.md](TLS-DECRYPT.md)。
 
-### 它能做什么、不能做什么
+### 9.1 分析器内置解密 —— 默认开启
 
-BeeEye-tlspeek 给 OpenSSL 库的 `SSL_write`/`SSL_read` 挂 uprobe，在加密前 / 解密后读出明文缓冲区。
+**分析器（:8081）启动即自动挂 uprobe 解密网关本机的 HTTPS**，不需要额外操作。它给 OpenSSL 与 GnuTLS 库的读写函数挂 uprobe，在加密前 / 解密后读出明文缓冲区。
 
 | 目标 | 能否解密 |
 |---|---|
-| **网关本机上的进程**（curl、浏览器、你自己的服务） | ✅ 能 |
+| **网关本机上动态链接 OpenSSL/GnuTLS 的进程**（curl、wget、git、apt、python……） | ✅ 能，默认自动 |
+| Chrome / AdsPower / Node（静态链接 strip 过的 BoringSSL） | ❌ 见 9.3 的 SSLKEYLOGFILE 路径 |
 | 摄像头 / 门锁 / 电视 / 手机 | ❌ **不能** —— 它们的 TLS 库跑在自己的硬件上，本机的 uprobe 够不着 |
 
-它是分析器「进程归属」的内容级搭档：能解密的进程集合，恰好就是「进程」列里显示进程名（而非 `Not this host`）的那批。
+它是分析器「进程归属」的内容级搭档：能解密的进程集合，恰好就是「进程」列里显示进程名（而非 `Not this host`）的那批。选中一个本机进程的包，详情区右侧「DECRYPTED PLAINTEXT」面板会实时显示该进程的解密明文。
 
-> **隐私**：这是 BeeEye 唯一读取应用**内容**的功能。因此它被做成**独立命令、默认关闭**：启动前什么都不抓，且必须显式指定目标。
+> **隐私**：这是 BeeEye 唯一读取应用**内容**的功能，因此有意做成**默认只覆盖本机进程**，且需要显式的 capability 才能工作（见下）；关掉 capability 或用独立命令行工具（9.2）时行为完全一致、可控。
 
-### 构建与授权
+**授权**（分析器要解密需要 `cap_bpf,cap_perfmon`，包含在一键脚本里）：
+
+```bash
+./start.sh --setcap && ./start.sh restart
+```
+
+**查看解密状态**：
+
+```bash
+curl http://127.0.0.1:8081/api/decrypt          # {"enabled":true,"running":true,"attached":2}
+curl http://127.0.0.1:8081/api/decrypt/libs     # 每个库的家族/版本/进程数/是否可挂载
+```
+
+也可运行时切换：`POST /api/decrypt {"enabled":false}` 关闭，`{"enabled":true}` 重新开启。
+
+### 9.2 加密库检测
+
+在挂载之前，先看清本机有哪些加密库、版本、是否可挂：
+
+```bash
+./BeeEye-agent/bin/BeeEye-tlspeek -detect
+```
+
+输出示例（真实机器）：
+
+```
+supported families (rules): [OpenSSL GnuTLS]
+
+OK   FAMILY    VERSION               PROCS       PATH
+✓    GnuTLS    GnuTLS 3.8.3          72          /usr/lib/x86_64-linux-gnu/libgnutls.so.30.37.1
+       uprobe decryption attaches to gnutls_record_send / gnutls_record_recv
+✓    OpenSSL   OpenSSL 3.0.13        44          /usr/lib/x86_64-linux-gnu/libssl.so.3
+       uprobe decryption attaches to SSL_write / SSL_read
+```
+
+`✓`/`✗` 表示 ELF 符号是否存在（能否真的挂上）；版本号从库文件内嵌的版本横幅解析（同一台机器上不同环境装的不同版本 OpenSSL 会分别列出，互不干扰）。
+
+**加密库支持是一张声明式规则表**（`internal/tlspeek/rules.go`）：一条规则 = 库家族名 + SONAME 正则 + 读写函数符号名，跨发行版/跨版本靠正则匹配文件名（如 `libssl.so.3` 与 `libssl.so.1.1` 同一条规则命中）。目前收录 OpenSSL、GnuTLS；给项目提交一条规则即可扩展支持的库家族。
+
+### 9.3 独立命令行工具（BeeEye-tlspeek）
+
+除了分析器内置的自动解密，独立命令行工具适合只想盯着某一个进程、或者不想开分析器时单独抓明文的场景。
+
+**构建与授权**：
 
 ```bash
 make tlspeek                                              # 构建 bin/BeeEye-tlspeek
 sudo setcap cap_bpf,cap_perfmon+ep BeeEye-agent/bin/BeeEye-tlspeek   # 授权（免 root）
 ```
 
-### 用法
+**用法**：
 
 ```bash
 cd BeeEye-agent
@@ -328,13 +408,13 @@ SM
 
 `→` 是发出（SSL_write，加密前），`←` 是收到（SSL_read，解密后）。`(+N more)` 表示该次调用的数据超过捕获上限被截断。
 
-### 边界说明
+**边界说明**：
 
-- 目前覆盖 **OpenSSL / BoringSSL** 系列（`libssl`/`libcrypto`）。GnuTLS、NSS、Go 的 `crypto/tls` 未覆盖。
-- 只做 **text 模式**（直接看明文）。keylog 导出、pcapng+内嵌密钥、分析器 UI 面板均属后续阶段，见 [TLS-DECRYPT.md](TLS-DECRYPT.md)。
+- 覆盖 **OpenSSL** 与 **GnuTLS** 两个家族（规则表见 9.2）。NSS、Go 的 `crypto/tls` 未覆盖。
+- 只做 **text 模式**（直接看明文）。keylog 导出、pcapng+内嵌密钥均属后续阶段，见 [TLS-DECRYPT.md](TLS-DECRYPT.md)。
 - 静态链接自带 OpenSSL 的二进制：`-pid` 自动发现可能找不到独立的库映射，可用 `-lib` 直接指向该可执行文件。
 
-### 解密 Chrome / AdsPower（SSLKEYLOGFILE 路径）
+### 9.4 解密 Chrome / AdsPower（SSLKEYLOGFILE 路径）
 
 **Chrome、AdsPower 无法用 BeeEye-tlspeek 解密** —— 它们把 BoringSSL 静态链进主二进制并 strip 了符号，没有 `SSL_write`/`SSL_read` 可挂。对这类 Chromium/Electron 浏览器，用它们自带支持的 SSLKEYLOGFILE 机制，工具是 `scripts/tls-decrypt.sh`：
 
@@ -381,7 +461,37 @@ sudo ./scripts/tls-decrypt.sh capture --app "/opt/AdsPower Global/adspower_globa
 
 ---
 
-## 9.5 离线数据包导入分析
+### 9.5 手机 / 电脑可选 MITM 解密（用户自愿）
+
+除了网关自身进程的解密，总览 UI 还提供一个**用户自愿**的选项：像 Surge / Burp / mitmproxy 那样，把某台设备的系统代理指向 BeeEye，看那台设备自己的明文流量。**默认关闭**，因为这需要在设备上装一个自定义根证书 —— 装了证书之后，那台设备到任何站点的 HTTPS 在网关这一跳都是明文可见的，这是一个信任决定，必须由设备的主人自己做。
+
+**开启**（编辑 `config/config.yaml`）：
+
+```yaml
+mitm:
+  enabled: true
+  listen: ":8443"          # CONNECT 代理监听地址
+  ca_dir: "./data/mitm"    # 根证书存放目录，首次启动自动生成
+```
+
+`./start.sh restart` 后，打开总览 UI 顶栏的 **Certificate & decryption / 证书与解密** 页面：
+
+1. **代理地址**：把这台设备的 Wi-Fi / HTTPS 代理设置指向这里（如 `192.168.1.1:8443`）
+2. **下载根证书**：Android/Windows 用 PEM，iOS/macOS 用 `.mobileconfig`（一键安装描述文件）
+3. **按平台安装**：页面上有 Android/iOS/macOS/Windows/Firefox 五个平台"装完证书还要手动做什么"的对照表（例如 iOS 装完描述文件后还要去「设置→通用→关于本机→证书信任设置」手动开启完全信任）
+4. **解密请求列表**：证书装好、代理配置好之后，该设备访问的 HTTPS 请求会实时出现在页面下方的表格里，点一行展开看到完整的请求头/响应头/响应体
+
+**它是 fail-closed 的**：没装这个证书的设备连接会直接失败，绝不会静默退回明文透传。
+
+**API**：`GET /api/mitm/status`、`GET /api/mitm/ca.pem`、`GET /api/mitm/ca.mobileconfig`、`GET /api/mitm/exchanges[/{id}]`。解密记录只在内存环形缓冲，**重启即清空，不落盘**——这是本项目会处理到的最敏感的数据。
+
+> 与 9.1-9.4 的区别：9.1-9.4 解密的是**网关自己的进程**（无需任何设备配合）；9.6 解密的是**你自愿接入的其它设备**（需要那台设备主动信任这个代理和证书）。两者服务不同的场景，互不替代。
+
+完整设计、四个平台的证书信任差异见 [TLS-DECRYPT.md §5](TLS-DECRYPT.md)。
+
+---
+
+### 9.6 离线数据包导入分析
 
 除了实时抓包，总览 UI 顶栏的 **Analysis（抓包分析）** 页签可以**导入 pcap 文件做离线分析**——把导出的抓包、或别处采集的 pcap 拖进来（或点击选择），在内存里跑与实时分析相同的引擎，产出取证级报告。
 
@@ -438,6 +548,10 @@ sudo ./scripts/tls-decrypt.sh capture --app "/opt/AdsPower Global/adspower_globa
 | `tls-decrypt.sh` 密钥为空 | 目标浏览器在脚本启动前就已运行。先完全退出它，再由脚本启动 |
 | 改了网卡还抓不到 | 确认 `config/config.yaml` 的接口名与 `ip link` 一致，且挂的是 LAN 侧 |
 | 端口被占用 | `./start.sh stop` 后确认 `.run/*.pid`；必要时手动清理 8080/8081/5173/5174 |
+| `/api/decrypt` 显示 `attached:0` | 缺 `cap_bpf,cap_perfmon`。跑 `./start.sh --setcap` 后 `restart` |
+| By IP 页地理位置只有国家 | 正常，未装 City/ASN 库。跑 `./scripts/geoip-setup.sh fetch <key>` 见 [§5.1](#51-geoip-定位精度) |
+| MITM 页面打不开代理 / 手机连不上 | 确认 `config/config.yaml` 里 `mitm.enabled: true` 并 `restart`；代理地址要用设备能访问到的网关 IP，不能用 `localhost` |
+| 装了 MITM 证书，某些 App 仍报证书错误 | 该 App 大概率做了证书固定（pinning），只信任自己内置的证书，任何代理都装不进去——不是 BeeEye 的问题，属于设计上的边界 |
 
 验证整套是否正常：
 

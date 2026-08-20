@@ -1,6 +1,7 @@
 # 蜂眼 BeeEye — 全新主机从零搭建指南
 
 > 面向**一台全新、干净的 Linux 主机**，从系统依赖到跑起来的完整步骤。
+> 官网：https://www.beeeye.dev/
 > English: [INSTALL.md](INSTALL.md) · 使用手册：[USAGE.md](USAGE.md) · 架构：[ARCHITECTURE.md](ARCHITECTURE.md)
 
 **最后更新**：2026-08-19

@@ -14,8 +14,10 @@ import (
 	"time"
 )
 
-// PayloadMax mirrors PAYLOAD_MAX in bpf/BeeEye_events.h.
-const PayloadMax = 512
+// PayloadMax mirrors PAYLOAD_MAX in bpf/BeeEye_events.h. It covers a full
+// standard-MTU Ethernet frame (1500) plus header and one VLAN tag, not just a
+// protocol header, because EVT_RAW_FRAME needs the whole frame — see Kind.
+const PayloadMax = 1536
 
 // EventSize is the on-wire size of one ringbuf record.
 const EventSize = 104 + PayloadMax
@@ -33,6 +35,12 @@ const (
 	KindARP          Kind = 7
 	KindSSDP         Kind = 8
 	KindDHCP         Kind = 9
+	// KindRawFrame is only emitted when raw-frame mode is on (SetRawFrameMode):
+	// a whole-frame mirror, bypassing every other kind's in-kernel protocol
+	// identification, so the ring buffer can serve as a live.Source on par
+	// with AF_PACKET (see source.go). Event.Payload is a raw Ethernet frame
+	// for this kind, not a protocol payload.
+	KindRawFrame Kind = 10
 )
 
 // String returns the enum key. It is deliberately a stable machine key, not a
@@ -57,6 +65,8 @@ func (k Kind) String() string {
 		return "ssdp"
 	case KindDHCP:
 		return "dhcp"
+	case KindRawFrame:
+		return "raw_frame"
 	}
 	return "unknown"
 }

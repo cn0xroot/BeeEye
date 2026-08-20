@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { formatBytes } from '../api'
 import { TrendChart, BarRows, Donut } from './Charts'
 import { SeverityTag } from './Tables'
+import WorldMap from './WorldMap'
 
 // StatTile is a hero number, not a chart: a single value with a label reads
 // faster than any plot of one number could.
@@ -85,6 +86,8 @@ export default function Overview({ summary, series, events, topCountries, protoc
           <BarRows rows={(topCountries || []).map((r) => ({ key: r.key, value: r.bytes }))} />
         </section>
       </div>
+
+      <WorldMap />
 
       <section className="card wide">
         <h2>{t('nav.alerts')}</h2>

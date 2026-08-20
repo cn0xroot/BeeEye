@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import Settings from './Settings'
 
-const VIEWS = ['overview', 'devices', 'connections', 'byIp', 'byProtocol', 'dns', 'analysis', 'alerts']
+const VIEWS = ['overview', 'devices', 'connections', 'byIp', 'byProtocol', 'dns', 'analysis', 'mitm', 'alerts']
 
 // The two glyphs are inline SVG rather than an emoji or an icon font: ☀/🌙
 // render as someone else's colour picture on most platforms, and here the
