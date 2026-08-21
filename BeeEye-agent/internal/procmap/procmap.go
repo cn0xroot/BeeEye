@@ -93,21 +93,42 @@ func (r *Resolver) Lookup(proto string, local netip.AddrPort) (Process, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.refreshSockets()
-	inode, ok := r.sockets[socketKey{proto, normalize(local)}]
+	inode, ok := r.findSocket(proto, local, false)
 	if !ok {
-		// A listening socket is recorded against the wildcard address, so a
-		// flow to a specific local IP still resolves.
-		wildcard := netip.AddrPortFrom(netip.IPv6Unspecified(), local.Port())
-		inode, ok = r.sockets[socketKey{proto, wildcard}]
+		// The cached snapshot may simply be too old to contain a connection
+		// that opened after it was taken — routine for a short-lived one
+		// (curl, any one-shot command), which can complete its whole life
+		// within the cache's own ttl. One forced, uncached rescan catches
+		// that. Paying for it only on a miss, not on every lookup, is what
+		// keeps the ttl worth having at all on a busy capture.
+		inode, ok = r.findSocket(proto, local, true)
 		if !ok {
 			return Process{}, false
 		}
 	}
 
-	r.refreshInodes()
+	r.refreshInodes(false)
 	p, ok := r.inodes[inode]
+	if !ok {
+		// Same race, the other half: the socket table saw it, but the fd
+		// scan that maps inode → process was itself a hair too early.
+		r.refreshInodes(true)
+		p, ok = r.inodes[inode]
+	}
 	return p, ok
+}
+
+// findSocket resolves local to a socket inode, trying the wildcard (listening
+// socket) address as a fallback the way Lookup always has. Split out so a
+// forced retry can share the exact same matching logic as the cached path.
+func (r *Resolver) findSocket(proto string, local netip.AddrPort, force bool) (uint64, bool) {
+	r.refreshSockets(force)
+	if inode, ok := r.sockets[socketKey{proto, normalize(local)}]; ok {
+		return inode, true
+	}
+	wildcard := netip.AddrPortFrom(netip.IPv6Unspecified(), local.Port())
+	inode, ok := r.sockets[socketKey{proto, wildcard}]
+	return inode, ok
 }
 
 // LookupFlow picks whichever end of a flow is local and resolves it. It returns
@@ -143,8 +164,8 @@ func (r *Resolver) refreshLocalAddrs() {
 	r.localAddrsAt = time.Now()
 }
 
-func (r *Resolver) refreshSockets() {
-	if time.Since(r.socketsAt) < r.ttl && r.sockets != nil {
+func (r *Resolver) refreshSockets(force bool) {
+	if !force && time.Since(r.socketsAt) < r.ttl && r.sockets != nil {
 		return
 	}
 	out := map[socketKey]uint64{}
@@ -160,8 +181,8 @@ func (r *Resolver) refreshSockets() {
 	r.socketsAt = time.Now()
 }
 
-func (r *Resolver) refreshInodes() {
-	if time.Since(r.inodesAt) < r.ttl && r.inodes != nil {
+func (r *Resolver) refreshInodes(force bool) {
+	if !force && time.Since(r.inodesAt) < r.ttl && r.inodes != nil {
 		return
 	}
 	r.inodes = scanProcFDs()

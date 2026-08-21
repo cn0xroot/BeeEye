@@ -12,6 +12,13 @@ int  BeeEyeRenderDeviceName(char *buf, int buflen);
 int  BeeEyeRenderFrame(const float *intensity, const float *channel_rgb,
                        int channels, int width, int height, float time_s,
                        unsigned char *out);
+int  BeeEyeRenderCurveFrame(const float *tx_values, const float *rx_values,
+                            int width, int height, float time_s,
+                            float tx_r, float tx_g, float tx_b,
+                            float rx_r, float rx_g, float rx_b,
+                            float hot_r, float hot_g, float hot_b,
+                            float base_r, float base_g, float base_b,
+                            unsigned char *out);
 void BeeEyeRenderShutdown(void);
 */
 import "C"
@@ -66,6 +73,28 @@ func (r *cudaRenderer) Render(intensity, channelRGB []float32, channels, width, 
 		// Every failure code maps to a specific CUDA call in the .cu file;
 		// keeping the number makes a driver problem diagnosable from a log.
 		return fmt.Errorf("render: CUDA frame failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+func (r *cudaRenderer) RenderCurve(txValues, rxValues []float32, width, height int, timeS float32, txRGB, rxRGB, hotRGB, baseRGB [3]float32, out []byte) error {
+	if width <= 0 || height <= 0 || len(txValues) < width || len(rxValues) < width || len(out) < width*height*4 {
+		return errBadGeometry
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	rc := C.BeeEyeRenderCurveFrame(
+		(*C.float)(unsafe.Pointer(&txValues[0])),
+		(*C.float)(unsafe.Pointer(&rxValues[0])),
+		C.int(width), C.int(height), C.float(timeS),
+		C.float(txRGB[0]), C.float(txRGB[1]), C.float(txRGB[2]),
+		C.float(rxRGB[0]), C.float(rxRGB[1]), C.float(rxRGB[2]),
+		C.float(hotRGB[0]), C.float(hotRGB[1]), C.float(hotRGB[2]),
+		C.float(baseRGB[0]), C.float(baseRGB[1]), C.float(baseRGB[2]),
+		(*C.uchar)(unsafe.Pointer(&out[0])))
+	if rc != 0 {
+		return fmt.Errorf("render: CUDA curve frame failed (code %d)", int(rc))
 	}
 	return nil
 }

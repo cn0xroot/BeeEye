@@ -49,6 +49,40 @@ export const api = {
   start: (opts) => req('/api/capture/start', { method: 'POST', body: JSON.stringify(opts) }),
   stop: () => req('/api/capture/stop', { method: 'POST' }),
 
+  // Not built on req(): a multipart upload needs the browser to set its own
+  // Content-Type (with the boundary), which req()'s default JSON header
+  // would stomp on.
+  openFile: async (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch('/api/pcap/open', { method: 'POST', body: form })
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`
+      try {
+        const body = await res.json()
+        if (body && body.error) detail = body.error
+      } catch {
+        /* non-JSON error body; the status is all we have */
+      }
+      throw new Error(detail)
+    }
+    return res.json()
+  },
+
+  // Best-effort: folds the same file into the overview app's own store (a
+  // separate process, normally on :8080) so it stops showing only its live
+  // database once a historical capture has been opened here — the two UIs
+  // otherwise had no way to agree on "the data" for an imported file, only
+  // for live traffic. Silently ignored on failure (wrong port, overview not
+  // running, CORS blocked) since this is a bonus, not the primary import the
+  // analyzer itself just did.
+  importToOverview: (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    const url = `${location.protocol}//${location.hostname}:8080/api/pcap/import`
+    fetch(url, { method: 'POST', body: form }).catch(() => {})
+  },
+
   setFilter: (filter) => req('/api/filter', { method: 'POST', body: JSON.stringify({ filter }) }),
   validateFilter: (filter) =>
     req('/api/filter/validate', { method: 'POST', body: JSON.stringify({ filter }) }),

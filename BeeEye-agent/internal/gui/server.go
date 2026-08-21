@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"BeeEye/internal/analyze"
@@ -25,7 +25,6 @@ import (
 type Server struct {
 	sess    *Session
 	webDir  string
-	procs   *procmap.Resolver
 	decrypt *Decryptor
 }
 
@@ -33,11 +32,12 @@ type Server struct {
 // decryption on at startup (the "on by default" behaviour) — it attaches
 // uprobes to the gateway's OpenSSL libraries and surfaces the plaintext. It is
 // best-effort: without CAP_BPF the analyzer runs fine, just without decryption.
+//
+// Process attribution (procmap) is owned by Session, not here — see
+// Session.LookupProcess — because it needs to run the moment a packet is
+// captured, not whenever an HTTP handler happens to ask about it.
 func NewServer(sess *Session, webDir string, decryptDefault bool) *Server {
-	// 2s of staleness is a deliberate trade: the /proc scans are far more
-	// expensive than the dissection they annotate, and socket ownership does
-	// not change meaningfully faster than that.
-	srv := &Server{sess: sess, webDir: webDir, procs: procmap.New(2 * time.Second), decrypt: NewDecryptor()}
+	srv := &Server{sess: sess, webDir: webDir, decrypt: NewDecryptor()}
 	if decryptDefault {
 		srv.decrypt.Enable()
 	}
@@ -51,6 +51,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("POST /api/capture/start", s.start)
 	mux.HandleFunc("POST /api/capture/stop", s.stop)
+	mux.HandleFunc("POST /api/pcap/open", s.openFile)
 	mux.HandleFunc("POST /api/filter", s.setFilter)
 	mux.HandleFunc("POST /api/filter/validate", s.validateFilter)
 	mux.HandleFunc("GET /api/packets", s.packets)
@@ -108,6 +109,33 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 	if err := s.sess.Stop(); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, s.sess.Status())
+}
+
+// maxPcapOpenBytes bounds an uploaded .pcap file — large enough for a
+// realistic capture session, small enough that a client cannot use this
+// endpoint to exhaust the process reading it into memory.
+const maxPcapOpenBytes = 512 << 20 // 512 MiB
+
+// openFile replays an uploaded .pcap file through the same pipeline a live
+// capture uses (Session.OpenFile) — Wireshark's File > Open, in effect.
+// Stops whatever capture or replay was already running the same way
+// switching interfaces does.
+func (s *Server) openFile(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxPcapOpenBytes)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.sess.OpenFile(file, hdr.Filename); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, s.sess.Status())
@@ -198,22 +226,12 @@ func (srv *Server) toSummary(r *dissect.Result) summary {
 	return s
 }
 
-// lookupProcess attributes a flow to a local process where that is meaningful.
+// lookupProcess attributes a flow to a local process where that is
+// meaningful. Delegates to the session, which decided this at capture time
+// (see Session.LookupProcess) rather than now, for anything dissected since
+// this cache existed.
 func (srv *Server) lookupProcess(r *dissect.Result) (procmap.Process, string, bool) {
-	if srv.procs == nil || r.Transport == "" || r.SrcPort == 0 {
-		return procmap.Process{}, "", false
-	}
-	src, err := netip.ParseAddr(r.Src)
-	if err != nil {
-		return procmap.Process{}, "", false
-	}
-	dst, err := netip.ParseAddr(r.Dst)
-	if err != nil {
-		return procmap.Process{}, "", false
-	}
-	return srv.procs.LookupFlow(r.Transport,
-		netip.AddrPortFrom(src, uint16(r.SrcPort)),
-		netip.AddrPortFrom(dst, uint16(r.DstPort)))
+	return srv.sess.LookupProcess(r)
 }
 
 func (s *Server) packets(w http.ResponseWriter, r *http.Request) {
@@ -469,11 +487,22 @@ or <code>cd BeeEye-gui && npm install && npm run dev</code> for a dev server.</p
 one leaves the other running.</p></body></html>`)
 			return
 		}
+		// See BeeEye-agent/internal/api/api.go's spaHandler for why index.html
+		// must always be revalidated while a hashed /assets/*.js can be cached
+		// indefinitely: without this, a browser can keep running a pre-redeploy
+		// bundle for a long time, which looks exactly like "the fix didn't
+		// ship" to whoever is testing it.
 		p := filepath.Join(s.webDir, filepath.Clean(r.URL.Path))
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			if strings.HasPrefix(r.URL.Path, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
+			}
 			http.ServeFile(w, r, p)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, filepath.Join(s.webDir, "index.html"))
 	})
 }

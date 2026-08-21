@@ -12,6 +12,7 @@ package main
 import (
 	"bufio"
 	"flag"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -146,6 +147,7 @@ func (h *hotplugSupervisor) swapTo(iface string) {
 		log.Printf("hotplug: cannot open capture on %s: %v", iface, err)
 		return
 	}
+	p.SetByteSampler(h.srv.AddTrafficBytes)
 	h.mu.Lock()
 	old := h.pipeline
 	h.pipeline = p
@@ -326,7 +328,22 @@ func main() {
 	// --- serve API + SPA ---
 	srv := api.New(st, cfg)
 	sup.srv = srv
+	// Importing a capture file (from the analyzer's "open file" feature, or
+	// the overview's own upload) folds it into the same store the overview
+	// reads — independent of whether a live pipeline is currently running,
+	// so this is wired unconditionally rather than inside the pipeline-nil
+	// checks below.
+	srv.SetPcapImporter(func(r io.Reader, name string) error {
+		_, err := livesource.ImportFile(st, r, name, &cfg.Detection, intel)
+		return err
+	})
 	if pipeline != nil {
+		// Feeds the overview's GPU-rendered traffic-trend curve (F7). Wired
+		// here rather than where pipeline was opened above because srv (and
+		// so AddTrafficBytes) does not exist yet at that point — this is the
+		// first moment both are alive. hotplugSupervisor.swapTo wires the
+		// same thing for every pipeline it opens after this one.
+		pipeline.SetByteSampler(srv.AddTrafficBytes)
 		// Only meaningful with a running pipeline actually feeding it packets
 		// (F11) — otherwise the endpoint stays off and answers with a clear
 		// "no live pipeline" error rather than accepting a request that can
@@ -339,9 +356,13 @@ func main() {
 		srv.SetSource(false, "", "simulated")
 	}
 
-	// Opt-in MITM decryption (F45): off unless mitm.enabled is set. Failing
-	// to start it is logged, not fatal — the rest of BeeEye has nothing to
-	// do with this feature and must not go down because of it.
+	// MITM decryption (F45), on by default as of 2026-08-20: the proxy starts
+	// listening and a CA is generated, but that alone decrypts nothing — a
+	// device only becomes visible once its owner installs the CA and points
+	// that device's own proxy setting here (see MITMConfig's doc comment).
+	// mitm.enabled: false in config.yaml turns the listener off entirely.
+	// Failing to start it is logged, not fatal — the rest of BeeEye has
+	// nothing to do with this feature and must not go down because of it.
 	if cfg.MITM.Enabled {
 		ca, err := mitm.LoadOrCreate(cfg.MITM.CADir)
 		if err != nil {

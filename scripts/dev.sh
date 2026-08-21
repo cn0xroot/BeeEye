@@ -27,6 +27,16 @@ gui_binary() {
   fi
 }
 
+# Same preference for the overview agent, which since F7's traffic-trend
+# curve also has a render.Renderer to pick a backend for.
+agent_binary() {
+  if [[ -x "$BIN/BeeEye-agent-cuda" ]]; then
+    echo "$BIN/BeeEye-agent-cuda"
+  else
+    echo "$BIN/BeeEye-agent"
+  fi
+}
+
 # default_iface picks the interface carrying the default route, so `make dev`
 # on a laptop captures something real instead of an empty loopback.
 default_iface() {
@@ -60,7 +70,7 @@ cmd_start() {
 
   echo "starting BeeEye…"
   BEEEYE_LISTEN=":$AGENT_PORT" \
-    start_one agent "$BIN/BeeEye-agent" -config "$ROOT/config/config.yaml"
+    start_one agent "$(agent_binary)" -config "$ROOT/config/config.yaml"
   start_one gui "$(gui_binary)" -listen ":$GUI_PORT" -iface "$IFACE"
 
   # Wait for both to answer rather than guessing with a fixed sleep.

@@ -9,6 +9,7 @@
 package pcapfile
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -19,14 +20,22 @@ import (
 // Link-layer types this reader understands.
 const (
 	LinkEthernet = 1
-	LinkRaw      = 101 // raw IP, no link header
+	// LinkRawBSD is DLT_RAW as historically used by libpcap/tcpdump on Linux
+	// and various BSDs — raw IP, no link header — before LINKTYPE_RAW (101)
+	// was standardized as a distinct, platform-independent value. Files from
+	// dumpcap on a tunnel/VPN-type interface (vtiN and similar) commonly
+	// carry this value rather than 101; both mean exactly the same thing and
+	// must be treated identically (see dissect.Packet).
+	LinkRawBSD   = 12
+	LinkRaw      = 101 // raw IP, no link header (the standardized LINKTYPE_RAW)
 	LinkLinuxSLL = 113 // "any" pseudo-device
 )
 
 var (
-	// ErrNotPcap means the magic number did not match any known variant —
-	// most often a pcapng file, which is a different format entirely.
-	ErrNotPcap = errors.New("pcapfile: not a classic libpcap file (a pcapng file needs conversion: editcap -F pcap in.pcapng out.pcap)")
+	// ErrNotPcap means the magic number did not match classic pcap or
+	// pcapng (see Open, which recognises both) — the file is neither, or is
+	// truncated before its first 4 bytes.
+	ErrNotPcap = errors.New("pcapfile: not a recognised capture file (neither classic pcap nor pcapng)")
 	// ErrTruncated means the file ended mid-record.
 	ErrTruncated = errors.New("pcapfile: file ends mid-packet")
 )
@@ -43,11 +52,23 @@ type Header struct {
 
 // Packet is one record.
 type Packet struct {
-	Index   int64
-	TS      time.Time
-	Data    []byte
-	CapLen  int
-	OrigLen int
+	Index int64
+	TS    time.Time
+	Data  []byte
+	// LinkType is the LINKTYPE_* of Data's own framing (see the Link-layer
+	// types const block above) — a classic pcap file carries one for the
+	// whole file, pcapng one per interface, so this is set per packet even
+	// though in practice it is almost always constant across an entire
+	// replay. dissect.Packet treats live.Packet's zero value (never
+	// explicitly set on the live AF_PACKET/eBPF capture path, which is
+	// always genuine Ethernet) the same as LinkEthernet, so this is not a
+	// special "unset" sentinel here — a classic pcap file whose header
+	// genuinely says LINKTYPE_NULL (0, BSD loopback) is not something either
+	// reader distinguishes from "unset"; that encapsulation is not one this
+	// analyzer targets.
+	LinkType uint32
+	CapLen   int
+	OrigLen  int
 }
 
 // Reader streams packets out of a libpcap file.
@@ -139,12 +160,39 @@ func (r *Reader) Next() (*Packet, error) {
 
 	r.index++
 	return &Packet{
-		Index:   r.index,
-		TS:      time.Unix(int64(sec), nsec),
-		Data:    data,
-		CapLen:  int(capLen),
-		OrigLen: int(origLen),
+		Index:    r.index,
+		TS:       time.Unix(int64(sec), nsec),
+		Data:     data,
+		LinkType: r.hdr.LinkType,
+		CapLen:   int(capLen),
+		OrigLen:  int(origLen),
 	}, nil
+}
+
+// PacketReader is what both Reader (classic pcap) and NgReader (pcapng)
+// implement — the only thing a caller that just wants packets out of a
+// capture file needs, regardless of which of the two formats it turns out
+// to be.
+type PacketReader interface {
+	Next() (*Packet, error)
+}
+
+// Open auto-detects the capture format — classic pcap or pcapng, the two
+// formats Wireshark, tcpdump and dumpcap actually write — from the first
+// bytes, and returns the matching reader. Prefer this over calling
+// NewReader/NewNgReader directly unless the format is already known; a file
+// someone hands you could be either; a person opening one to look at it
+// should not need to know the difference or run a converter first.
+func Open(r io.Reader) (PacketReader, error) {
+	br := bufio.NewReaderSize(r, 64<<10)
+	head, err := br.Peek(4)
+	if err != nil {
+		return nil, ErrNotPcap
+	}
+	if binary.LittleEndian.Uint32(head) == blockTypeSectionHeader {
+		return NewNgReader(br)
+	}
+	return NewReader(br)
 }
 
 // LinkTypeName renders the link type for display.

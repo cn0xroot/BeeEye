@@ -7,14 +7,19 @@
 package gui
 
 import (
+	"io"
 	"log"
+	"net/netip"
+	"strconv"
 	"sync"
 	"time"
 
 	"BeeEye/internal/dfilter"
 	"BeeEye/internal/dissect"
 	"BeeEye/internal/live"
+	"BeeEye/internal/livefile"
 	"BeeEye/internal/namemap"
+	"BeeEye/internal/procmap"
 	"BeeEye/internal/render"
 )
 
@@ -56,6 +61,22 @@ type Session struct {
 	fallbackErr string // why the real capture was unavailable
 	started     time.Time
 	running     bool
+	// offline is true when src is replaying a .pcap file (OpenFile) rather
+	// than capturing a NIC — its own honesty flag alongside realCapture,
+	// since "this is history, not this second" is a different fact than
+	// "this is the simulator standing in" (F43 is about the latter).
+	offline bool
+	// consumeDone is closed by the currently running consume() goroutine
+	// when its packet channel closes and it returns. startWith waits on it
+	// before resetting ring/dropped/etc. for the capture it is about to
+	// start — Stop() closing the previous source only asks that goroutine to
+	// exit, asynchronously; without this wait it can still be mid-append to
+	// s.ring after startWith has already reset it, leaking a few frames
+	// from the capture that just stopped into the one about to begin. A few
+	// stray live packets bleeding across an interface swap reads as mildly
+	// stale; the same leak into a freshly opened .pcap file's packet list is
+	// wrong data, not stale data.
+	consumeDone chan struct{}
 
 	dis     *dissect.Dissector
 	ring    []*dissect.Result // most recent packets, oldest first
@@ -82,6 +103,28 @@ type Session struct {
 	// (F21). It survives a filter change but is reset when a new capture
 	// starts, because the associations belong to the traffic that taught them.
 	names *namemap.Map
+
+	// procs attributes a flow to a local process (procmap). Owned here, not
+	// by Server, so consume() can look a flow up the moment its packet
+	// arrives — see procCache.
+	procs *procmap.Resolver
+	// procCache holds the attribution decided at capture time, keyed by
+	// packet ordinal. Looking this up later, on demand (the API's old
+	// behaviour), is too late for a short-lived connection: by the time a
+	// browser click asks about it, the process may have exited and its
+	// socket already be gone from /proc. Capture time is the one moment a
+	// packet's own connection is guaranteed to still be live. Evicted
+	// alongside the ring entry it belongs to, so this cannot outgrow it.
+	procCache map[int64]procAttr
+}
+
+// procAttr is the process attribution decided for one packet at capture
+// time. ok mirrors procmap.Resolver.LookupFlow's own ok — false is a real,
+// cacheable answer ("this flow is not local"), not a miss.
+type procAttr struct {
+	proc procmap.Process
+	side string
+	ok   bool
 }
 
 // NewSession returns an idle session.
@@ -97,6 +140,10 @@ func NewSession(ringSize int) *Session {
 		names:    namemap.New(0),
 		renderer: render.NewRenderer(),
 		rotStop:  make(chan struct{}),
+		// 2s of staleness is a deliberate trade: the /proc scans are far more
+		// expensive than the dissection they annotate, and socket ownership
+		// does not change meaningfully faster than that.
+		procs: procmap.New(2 * time.Second),
 	}
 	// One column per tick. At 80ms a 1024-wide field holds ~82s of history,
 	// which is the span where a beacon's rhythm becomes visible to the eye.
@@ -148,6 +195,42 @@ func (s *Session) Names() *namemap.Map {
 	return s.names
 }
 
+// LookupProcess attributes a flow to a local process, preferring the
+// attribution decided when the packet was captured (see consume) over a
+// fresh lookup — the flow's connection is only guaranteed to still exist at
+// that moment, not whenever this is later called. A packet from before this
+// cache existed (persisted to disk, then read back after ring eviction)
+// falls back to a live lookup, which is honestly best-effort at that point.
+func (s *Session) LookupProcess(r *dissect.Result) (procmap.Process, string, bool) {
+	s.mu.RLock()
+	a, cached := s.procCache[r.No]
+	s.mu.RUnlock()
+	if cached {
+		return a.proc, a.side, a.ok
+	}
+	return s.lookupProcessNow(r)
+}
+
+// lookupProcessNow queries procmap directly, with no cache involved. Called
+// from consume() at capture time (the cache being filled) and as
+// LookupProcess's fallback for anything the cache never saw.
+func (s *Session) lookupProcessNow(r *dissect.Result) (procmap.Process, string, bool) {
+	if s.procs == nil || r.Transport == "" || r.SrcPort == 0 {
+		return procmap.Process{}, "", false
+	}
+	src, err := netip.ParseAddr(r.Src)
+	if err != nil {
+		return procmap.Process{}, "", false
+	}
+	dst, err := netip.ParseAddr(r.Dst)
+	if err != nil {
+		return procmap.Process{}, "", false
+	}
+	return s.procs.LookupFlow(r.Transport,
+		netip.AddrPortFrom(src, uint16(r.SrcPort)),
+		netip.AddrPortFrom(dst, uint16(r.DstPort)))
+}
+
 // Renderer exposes the active colour-field backend (cuda or cpu).
 func (s *Session) Renderer() render.Renderer { return s.renderer }
 
@@ -175,15 +258,6 @@ type StartOptions struct {
 // Start opens a capture source and begins dissecting. Starting while already
 // running restarts cleanly rather than stacking two readers on one interface.
 func (s *Session) Start(opt StartOptions) error {
-	if err := s.Stop(); err != nil {
-		return err
-	}
-
-	expr, err := dfilter.Compile(opt.Filter)
-	if err != nil {
-		return err
-	}
-
 	// Deliberately live.Open, not capsource.Open: the analyzer stays on
 	// AF_PACKET rather than competing for the same interface's eBPF TCX
 	// hook the agent may already be using. On this host, verified with
@@ -194,11 +268,67 @@ func (s *Session) Start(opt StartOptions) error {
 	// first claim; the analyzer, started on demand, uses the capture path
 	// that has always supported multiple independent readers on one NIC.
 	src, real, openErr := live.Open(opt.Iface, opt.SnapLen, opt.Promisc)
+	return s.startWith(src, opt.Iface, opt.SnapLen, opt.Filter, real, openErr, false)
+}
 
+// OpenFile replays a previously captured .pcap file through the exact same
+// pipeline a live capture uses — same dissector, same ring buffer, same
+// display filter, same subscribers — so the packet list, traffic field and
+// protocol detail panes need no separate "offline" rendering path. r is
+// typically an uploaded file's multipart.File; ownership passes to the
+// session (see livefile.Open), which closes it when replay finishes or the
+// session moves on to something else.
+//
+// The only thing that distinguishes this from Start is honesty: Status.Offline
+// tells the UI what is on screen is history, not this second (see the
+// offline field's own comment — a different fact than F43's realCapture).
+func (s *Session) OpenFile(r io.ReadCloser, name string) error {
+	src, err := livefile.Open(r, name)
+	if err != nil {
+		return err
+	}
+	return s.startWith(src, name, 0, "", true, nil, true)
+}
+
+// startWith is Start and OpenFile's shared machinery: stop whatever was
+// running, reset every piece of state a fresh capture invalidates, and hand
+// the new source's packet channel to a consume goroutine. filterText is
+// compiled before anything is torn down, so a typo in it leaves the
+// previous capture running rather than stopping it for nothing.
+func (s *Session) startWith(src live.Source, iface string, snapLen int, filterText string, real bool, openErr error, offline bool) error {
+	expr, err := dfilter.Compile(filterText)
+	if err != nil {
+		if src != nil {
+			src.Close()
+		}
+		return err
+	}
+
+	if err := s.Stop(); err != nil {
+		if src != nil {
+			src.Close()
+		}
+		return err
+	}
+
+	// See consumeDone's field comment: Stop() above only asked the previous
+	// consume() goroutine to exit by closing its source, which is
+	// asynchronous — wait for it to actually finish before resetting
+	// anything it might still be writing to.
+	s.mu.Lock()
+	prevDone := s.consumeDone
+	s.mu.Unlock()
+	if prevDone != nil {
+		<-prevDone
+	}
+
+	done := make(chan struct{})
 	s.mu.Lock()
 	s.src = src
-	s.iface = opt.Iface
+	s.iface = iface
 	s.realCapture = real
+	s.offline = offline
+	s.consumeDone = done
 	s.fallbackErr = ""
 	if !real && openErr != nil {
 		s.fallbackErr = openErr.Error()
@@ -208,18 +338,23 @@ func (s *Session) Start(opt StartOptions) error {
 	s.dis = dissect.New()
 	s.ring = nil
 	s.dropped = 0
+	s.procCache = nil
 	s.filter = expr
 	s.names = namemap.New(0)
 	if s.sink != nil {
 		s.sink.Close()
 		s.sink = nil
 	}
-	if s.captureDir != "" {
-		snap := uint32(opt.SnapLen)
+	// Replaying a file that is itself a pcap makes writing a second copy of
+	// it pointless — the persistence this feeds is for recovering a live
+	// capture's own bytes after ring eviction, which a replayed file never
+	// needs (its bytes are sitting right there in the file it came from).
+	if s.captureDir != "" && !offline {
+		snap := uint32(snapLen)
 		if snap == 0 {
 			snap = live.DefaultSnapLen
 		}
-		if sink, err := newPcapSink(s.captureDir, opt.Iface, snap, s.captureMax); err != nil {
+		if sink, err := newPcapSink(s.captureDir, iface, snap, s.captureMax); err != nil {
 			log.Printf("gui: packet persistence disabled: %v", err)
 		} else {
 			s.sink = sink
@@ -229,12 +364,16 @@ func (s *Session) Start(opt StartOptions) error {
 	packets := src.Packets()
 	s.mu.Unlock()
 
-	go s.consume(packets)
+	go s.consume(packets, done)
 	return nil
 }
 
-// consume dissects every frame and fans it out to subscribers.
-func (s *Session) consume(packets <-chan live.Packet) {
+// consume dissects every frame and fans it out to subscribers. done is
+// closed on return — after the range loop exits, never before — so
+// startWith's next call can wait for that instead of racing this goroutine's
+// last few in-flight appends to s.ring.
+func (s *Session) consume(packets <-chan live.Packet, done chan struct{}) {
+	defer close(done)
 	names := s.Names()
 	for p := range packets {
 		// Dissecting is real work (field trees, string building) and s.dis is
@@ -246,14 +385,41 @@ func (s *Session) consume(packets <-chan live.Packet) {
 		// held here is a microsecond a UI click waits behind it.
 		res := s.dis.Packet(p)
 
+		// Attribute the flow now, while its connection is still guaranteed
+		// to exist — this packet is the proof it was just active. Waiting
+		// for a later API request to ask (the old behaviour) meant a
+		// short-lived connection (curl, any one-shot command) was routinely
+		// gone from /proc — socket closed, process exited — by the time
+		// anyone looked, misreporting a perfectly local flow as remote.
+		proc, side, ok := s.lookupProcessNow(res)
+		// Also fold it into the field index so the display filter can query
+		// it directly (process.comm contains "curl") -- the same mechanism
+		// every other field already uses, no separate query path for this
+		// one dimension. Safe to write here, before res is shared with any
+		// other goroutine via the ring or subs.
+		if ok {
+			if res.Fields == nil {
+				res.Fields = map[string][]string{}
+			}
+			res.Fields["process.comm"] = []string{proc.Comm}
+			res.Fields["process.pid"] = []string{strconv.Itoa(proc.PID)}
+		}
+
 		s.mu.Lock()
 		s.ring = append(s.ring, res)
 		if len(s.ring) > s.size {
 			// Drop the oldest in one slice re-slice rather than shifting.
 			over := len(s.ring) - s.size
+			for _, evicted := range s.ring[:over] {
+				delete(s.procCache, evicted.No)
+			}
 			s.ring = s.ring[over:]
 			s.dropped += int64(over)
 		}
+		if s.procCache == nil {
+			s.procCache = map[int64]procAttr{}
+		}
+		s.procCache[res.No] = procAttr{proc: proc, side: side, ok: ok}
 		matches := s.filter.Match(res)
 		subs := make([]chan *dissect.Result, 0, len(s.subs))
 		if matches {
@@ -285,6 +451,15 @@ func (s *Session) consume(packets <-chan live.Packet) {
 			}
 		}
 	}
+	// The channel closing is the source's own signal that there is nothing
+	// left to read — Stop() calling this for a live capture, or (offline)
+	// livefile.Open reaching the end of the file on its own. Either way,
+	// Status.Running must go false here rather than staying stuck at
+	// whatever Start last set it to: for a replayed file this is the only
+	// place anything ever clears it, since nobody calls Stop() for it.
+	s.mu.Lock()
+	s.running = false
+	s.mu.Unlock()
 }
 
 // Stop halts the capture. Stopping an idle session is not an error.
@@ -356,6 +531,11 @@ type Status struct {
 	Evicted        int64     `json:"evicted"`
 	RingSize       int       `json:"ring_size"`
 	CaptureFile    string    `json:"capture_file,omitempty"` // where the live capture is being saved
+	// Offline is true while replaying a .pcap file (OpenFile) — Iface holds
+	// the filename in that case. Own honesty flag alongside RealCapture: "this
+	// is history, not this second" is a different fact than F43's "this is
+	// the simulator standing in for a NIC we could not open."
+	Offline bool `json:"offline,omitempty"`
 }
 
 func (s *Session) Status() Status {
@@ -366,6 +546,7 @@ func (s *Session) Status() Status {
 		Running:        s.running,
 		Iface:          s.iface,
 		RealCapture:    s.realCapture,
+		Offline:        s.offline,
 		FallbackReason: s.fallbackErr,
 		Started:        s.started,
 		Buffered:       len(s.ring),

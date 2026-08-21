@@ -1,8 +1,10 @@
 import { useTranslation } from 'react-i18next'
 import { formatBytes } from '../api'
-import { TrendChart, BarRows, Donut } from './Charts'
+import { BarRows, Donut } from './Charts'
 import { SeverityTag } from './Tables'
+import TrafficTrendChart from './TrafficTrendChart'
 import WorldMap from './WorldMap'
+import InterfaceInfo from './InterfaceInfo'
 
 // StatTile is a hero number, not a chart: a single value with a label reads
 // faster than any plot of one number could.
@@ -16,7 +18,10 @@ function StatTile({ label, value, sub, tone }) {
   )
 }
 
-export default function Overview({ summary, series, events, topCountries, protocols, devices }) {
+export default function Overview({
+  summary, events, topCountries, protocols, devices,
+  imports, importScope, onScopeChange,
+}) {
   const { t } = useTranslation()
   const { t: td } = useTranslation('device')
   const { t: ta } = useTranslation('alert')
@@ -57,14 +62,7 @@ export default function Overview({ summary, series, events, topCountries, protoc
         />
       </div>
 
-      <section className="card wide">
-        <h2>{t('summary.trend')}</h2>
-        <TrendChart
-          points={series?.points}
-          series={series?.series}
-          labelFor={(k) => td(`category.${k}`, { defaultValue: k })}
-        />
-      </section>
+      <InterfaceInfo />
 
       <div className="card-row">
         <section className="card">
@@ -87,7 +85,34 @@ export default function Overview({ summary, series, events, topCountries, protoc
         </section>
       </div>
 
-      <WorldMap />
+      <section className="card wide">
+        <h2>{t('summary.trend')}</h2>
+        <TrafficTrendChart />
+      </section>
+
+      {imports && imports.length > 0 && (
+        <div className="import-scope-bar">
+          <span className="dim">{t('map.importedFiles')}:</span>
+          <select
+            value={importScope || ''}
+            onChange={(e) => onScopeChange(e.target.value || null)}
+          >
+            <option value="">{t('map.scopeLive')}</option>
+            {imports.map((b) => (
+              <option key={b.iface} value={b.iface}>
+                {b.iface} · {b.count}
+              </option>
+            ))}
+          </select>
+          {importScope && (
+            <button className="btn ghost tiny" onClick={() => onScopeChange(null)}>
+              {t('map.scopeClear')}
+            </button>
+          )}
+        </div>
+      )}
+
+      <WorldMap iface={importScope} />
 
       <section className="card wide">
         <h2>{t('nav.alerts')}</h2>

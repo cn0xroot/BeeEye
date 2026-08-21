@@ -18,6 +18,12 @@ The live analyzer — same live capture, switched between its light/dark themes 
 |---|---|
 | ![Analyzer, light theme, Chinese](PIC/analyzer-light-zh.png) | ![Analyzer, dark theme, Chinese](PIC/analyzer-dark-zh.png) |
 
+**BeeEye-desktop** — the same analyzer in a native window (a thin Tauri shell for an operator's own workstation, see [PROGRESS.en.md §2.5](PROGRESS.en.md)), across three of the built-in themes:
+
+| Paper Beige | Matrix (settings panel open) | Midnight Neon |
+|---|---|---|
+| ![Desktop app, paper beige theme](PIC/desktop-paper-beige.png) | ![Desktop app, Matrix theme, settings panel open](PIC/desktop-matrix-settings.png) | ![Desktop app, Midnight Neon theme](PIC/desktop-midnight-neon.png) |
+
 ---
 
 ## Two UIs, two processes

@@ -117,18 +117,35 @@ build_backend() {
     dim  "· binaries up to date"
   fi
 
-  # dev.sh runs the CUDA analyzer in preference to the portable one whenever it
-  # exists, so leaving it stale would silently run yesterday's renderer while
-  # every other artifact was rebuilt. Rebuild it on the same terms — but only
-  # if it is already there; its absence means this host has no nvcc and the
-  # portable binary is the intended one.
-  if [[ -x "$BIN/BeeEye-gui-cuda" ]]; then
-    if (( FORCE_REBUILD )) || stale "$ROOT/BeeEye-agent" "$BIN/BeeEye-gui-cuda" -name '*.go' \
-       || [[ "$ROOT/BeeEye-agent/cuda/BeeEye_render.cu" -nt "$BIN/BeeEye-gui-cuda" ]]; then
-      bold "· building BeeEye-gui-cuda"
+  # dev.sh runs the CUDA analyzer and the CUDA overview agent in preference to
+  # the portable ones whenever they exist, so leaving either stale would
+  # silently run yesterday's renderer while every other artifact was
+  # rebuilt. Rebuild on the same terms — but only if at least one is already
+  # there; its absence means this host has no nvcc and the portable binaries
+  # are the intended ones. `make build-cuda` always produces both, so one
+  # stale check covers rebuilding either.
+  if [[ -x "$BIN/BeeEye-gui-cuda" ]] || [[ -x "$BIN/BeeEye-agent-cuda" ]]; then
+    cuda_stale=0
+    if (( FORCE_REBUILD )); then
+      cuda_stale=1
+    fi
+    if [[ -x "$BIN/BeeEye-gui-cuda" ]]; then
+      if stale "$ROOT/BeeEye-agent" "$BIN/BeeEye-gui-cuda" -name '*.go' \
+         || [[ "$ROOT/BeeEye-agent/cuda/BeeEye_render.cu" -nt "$BIN/BeeEye-gui-cuda" ]]; then
+        cuda_stale=1
+      fi
+    fi
+    if [[ -x "$BIN/BeeEye-agent-cuda" ]]; then
+      if stale "$ROOT/BeeEye-agent" "$BIN/BeeEye-agent-cuda" -name '*.go' \
+         || [[ "$ROOT/BeeEye-agent/cuda/BeeEye_render.cu" -nt "$BIN/BeeEye-agent-cuda" ]]; then
+        cuda_stale=1
+      fi
+    fi
+    if (( cuda_stale )); then
+      bold "· building CUDA binaries"
       make -s build-cuda >/dev/null
     else
-      dim  "· CUDA analyzer up to date"
+      dim  "· CUDA binaries up to date"
     fi
   fi
 }
@@ -211,6 +228,7 @@ cmd_setcap() {
   sudo setcap cap_net_raw,cap_net_admin+ep "$BIN/BeeEye-gui"
   [[ -x "$BIN/BeeEye-gui-cuda" ]] && sudo setcap cap_net_raw,cap_net_admin+ep "$BIN/BeeEye-gui-cuda"
   sudo setcap cap_bpf,cap_net_admin,cap_perfmon+ep "$BIN/BeeEye-agent"
+  [[ -x "$BIN/BeeEye-agent-cuda" ]] && sudo setcap cap_bpf,cap_net_admin,cap_perfmon+ep "$BIN/BeeEye-agent-cuda"
   echo "done — restart with: ./start.sh restart"
 }
 

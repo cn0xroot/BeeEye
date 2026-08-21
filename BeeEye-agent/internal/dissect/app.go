@@ -1,6 +1,7 @@
 package dissect
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/binary"
 	"fmt"
@@ -19,6 +20,12 @@ func dissectAppTCP(r *Result, b []byte, off int, sport, dport uint16) {
 	switch {
 	case len(p) >= 6 && p[0] == 0x16 && p[1] == 0x03:
 		dissectTLS(r, b, off)
+	// Checked before the HTTP case, not after: "OPTIONS " is a valid first
+	// word for both an HTTP request line and a SIP one, and only the SIP
+	// check looks far enough (the line's own trailing " SIP/2.0") to tell
+	// them apart. Every other SIP method name is unambiguous on its own.
+	case looksLikeSIPRequest(p) || looksLikeSIPResponse(p):
+		dissectSIP(r, b, off)
 	case looksLikeHTTPRequest(p) || looksLikeHTTPResponse(p):
 		dissectHTTP(r, b, off)
 	case sport == 1883 || dport == 1883:
@@ -28,6 +35,11 @@ func dissectAppTCP(r *Result, b []byte, off int, sport, dport uint16) {
 		if len(p) > 2 {
 			dissectDNS(r, b, off+2, "dns")
 		}
+	case sport == 5060 || dport == 5060 || sport == 5061 || dport == 5061:
+		// Content sniffing above already catches a message that starts
+		// clean; this is the fallback for a mid-stream/pipelined segment
+		// that does not begin at a request or status line.
+		dissectSIP(r, b, off)
 	default:
 		if svc := wellKnownService(sport, dport); svc != "" {
 			r.Proto = svc
@@ -37,6 +49,7 @@ func dissectAppTCP(r *Result, b []byte, off int, sport, dport uint16) {
 }
 
 func dissectAppUDP(r *Result, b []byte, off int, sport, dport uint16) {
+	p := b[off:]
 	switch {
 	case sport == 53 || dport == 53:
 		dissectDNS(r, b, off, "dns")
@@ -52,6 +65,22 @@ func dissectAppUDP(r *Result, b []byte, off int, sport, dport uint16) {
 		r.Info = "NTP"
 	case sport == 5683 || dport == 5683:
 		dissectCoAP(r, b, off)
+	case looksLikeSIPRequest(p) || looksLikeSIPResponse(p) || sport == 5060 || dport == 5060:
+		// SIP's classic transport (RFC 3261): most calls' signaling never
+		// touches TCP at all.
+		dissectSIP(r, b, off)
+	case sport == 2152 || dport == 2152 || sport == 2123 || dport == 2123:
+		// GTP-U (2152, user-plane) / GTP-C (2123, control-plane) — a mobile
+		// core's own tunnel between the gateway and the radio side. Every
+		// phone's actual traffic (its TLS, HTTP, SIP, DNS…) rides inside a
+		// GTP-U G-PDU wrapping a second, complete IP packet; without peeling
+		// that back this analyzer sees nothing but "UDP 2152" between two
+		// core-network addresses no matter what the phone is really doing.
+		dissectGTP(r, b, off)
+	case sport == 4729 || dport == 4729:
+		// GSMTAP (osmocom's capture-relay format) — SIMtrace-family probes
+		// use this to deliver ISO/IEC 7816-4 SIM/USIM APDU traces.
+		dissectGSMTAP(r, b, off)
 	default:
 		if svc := wellKnownService(sport, dport); svc != "" {
 			r.Proto = svc
@@ -582,6 +611,248 @@ func dissectHTTP(r *Result, b []byte, off int) {
 		}
 	}
 	r.layer(n, "http")
+}
+
+// ------------------------------------------------------------------- SIP
+
+// sipRequestMethods are every method RFC 3261 and its extensions define.
+// "OPTIONS" is deliberately included even though HTTP has a same-named verb
+// — looksLikeSIPRequest disambiguates by also requiring the line's own
+// trailing " SIP/2.0", which an HTTP request line never has.
+var sipRequestMethods = []string{
+	"INVITE ", "ACK ", "BYE ", "CANCEL ", "REGISTER ", "OPTIONS ", "PRACK ",
+	"SUBSCRIBE ", "NOTIFY ", "PUBLISH ", "INFO ", "REFER ", "MESSAGE ", "UPDATE ",
+}
+
+func firstLine(p []byte) string {
+	line := p
+	if i := bytes.IndexByte(p, '\n'); i >= 0 {
+		line = p[:i]
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+	} else if len(line) > 256 {
+		// No line break at all inside a reasonable prefix means this is not
+		// text framed the way SIP/HTTP/SSDP are — cap what gets turned into
+		// a string rather than stringifying an entire binary payload.
+		line = line[:256]
+	}
+	return string(line)
+}
+
+func looksLikeSIPRequest(p []byte) bool {
+	line := firstLine(p)
+	for _, m := range sipRequestMethods {
+		if strings.HasPrefix(line, m) {
+			return strings.HasSuffix(line, "SIP/2.0")
+		}
+	}
+	return false
+}
+
+func looksLikeSIPResponse(p []byte) bool {
+	return len(p) >= 8 && string(p[:8]) == "SIP/2.0 "
+}
+
+// sipCompactHeaders expands the single-letter forms RFC 3261 §7.3.3 allows
+// (common on the wire since every byte matters on a constrained signaling
+// link) to their canonical names, so "f:" and "From:" land in the same
+// filterable field instead of silently splitting a call's headers in two.
+var sipCompactHeaders = map[string]string{
+	"f": "From", "t": "To", "i": "Call-ID", "m": "Contact",
+	"l": "Content-Length", "c": "Content-Type", "v": "Via",
+	"k": "Supported", "s": "Subject", "e": "Content-Encoding",
+}
+
+func sipHeaderName(k string) string {
+	if full, ok := sipCompactHeaders[strings.ToLower(k)]; ok {
+		return full
+	}
+	return k
+}
+
+// dissectSIP parses RFC 3261's request/status line and headers — the same
+// CRLF-delimited, "Name: value" text shape as HTTP (SIP was deliberately
+// modeled on it), just with call-signaling semantics: an INVITE/BYE/REGISTER
+// method line rather than a GET/POST one, and From/To/Call-ID/CSeq in place
+// of Host/User-Agent as the fields that actually identify a call. No SDP
+// body parsing (the media negotiation carried in a body after the headers)
+// — that is a second, unrelated grammar, and the signaling metadata here is
+// what a network view like this one needs.
+func dissectSIP(r *Result, b []byte, off int) {
+	p := b[off:]
+	r.proto("sip")
+	r.Proto = "SIP"
+
+	lines := strings.Split(string(p), "\r\n")
+	n := node("Session Initiation Protocol", off, len(p))
+
+	// A request line already names its own method ("INVITE sip:…"); only a
+	// status line ("200 OK") is missing it, which is why CSeq's method gets
+	// folded into Info below for responses only — doing it unconditionally
+	// left a request reading "INVITE sip:… (INVITE)".
+	isResponse := false
+	if len(lines) > 0 {
+		r.leaf(n, "Request/Status Line", "sip.line", lines[0], off, len(lines[0]))
+		fields := strings.Fields(lines[0])
+		switch {
+		case looksLikeSIPRequest(p) && len(fields) >= 2:
+			r.set("sip.method", fields[0])
+			r.set("sip.request_uri", fields[1])
+			r.Info = fields[0] + " " + fields[1]
+		case looksLikeSIPResponse(p) && len(fields) >= 2:
+			isResponse = true
+			r.set("sip.status_code", fields[1])
+			r.Info = "Status: " + strings.Join(fields[1:], " ")
+		}
+	}
+
+	pos := 0
+	for _, line := range lines[1:] {
+		pos += len(line) + 2
+		if line == "" {
+			break // the blank line separating headers from any SDP body
+		}
+		k, v, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		name := sipHeaderName(strings.TrimSpace(k))
+		v = strings.TrimSpace(v)
+		field := "sip." + strings.ToLower(strings.ReplaceAll(name, "-", "_"))
+		r.leaf(n, name, field, v, off+pos, len(line))
+
+		switch strings.ToLower(name) {
+		case "from":
+			r.set("sip.from", v)
+		case "to":
+			r.set("sip.to", v)
+		case "call-id":
+			r.set("sip.call_id", v)
+		case "via":
+			r.set("sip.via", v)
+		case "contact":
+			r.set("sip.contact", v)
+		case "user-agent":
+			r.set("sip.user_agent", v)
+		case "cseq":
+			r.set("sip.cseq", v)
+			if _, method, ok := strings.Cut(v, " "); ok {
+				r.set("sip.cseq.method", method)
+				if isResponse && r.Info != "" {
+					r.Info += " (" + method + ")"
+				}
+			}
+		}
+	}
+	r.layer(n, "sip")
+}
+
+// ------------------------------------------------------------------- GTP
+
+// dissectGTP parses a GTPv1 header (3GPP TS 29.060 §6) and, for a G-PDU
+// (message type 255 — the one carrying an actual tunneled packet rather
+// than tunnel-management signaling), recurses into the IPv4/IPv6 packet it
+// wraps exactly the way dissectRawLink does for a headerless capture: there
+// is no further framing to strip, just an IP version nibble to read.
+//
+// That recursive call is what makes the inner packet's own protocol (TLS,
+// HTTP, SIP, whatever the phone was actually doing) end up as this frame's
+// reported Proto/Info/Src/Dst — "gtp" stays in the protocol list (r.proto
+// only appends, never replaces) so `gtp` alone still finds every tunneled
+// frame, but the fields that matter for "what is this device talking to"
+// describe the phone's own conversation, not the two core-network relay
+// addresses the outer IP header names.
+func dissectGTP(r *Result, b []byte, off int) {
+	p := b[off:]
+	if len(p) < 8 {
+		return
+	}
+	flags := p[0]
+	version := (flags >> 5) & 0x07
+	msgType := p[1]
+	teid := binary.BigEndian.Uint32(p[4:8])
+
+	r.proto("gtp")
+	r.Proto = "GTP"
+	r.set("gtp.version", strconv.Itoa(int(version)))
+	r.set("gtp.message_type", strconv.Itoa(int(msgType)))
+	r.set("gtp.teid", fmt.Sprintf("0x%08x", teid))
+
+	hdrLen := 8
+	// Sequence Number / N-PDU Number / Next Extension Header Type — present
+	// as one 4-octet block whenever any of the E/S/PN flag bits are set,
+	// even though only the bit's own sub-field is meaningful.
+	if flags&0x07 != 0 {
+		hdrLen += 4
+		if flags&0x04 != 0 && off+hdrLen <= len(b) { // E bit: extension headers follow
+			pos := hdrLen
+			for off+pos < len(b) {
+				extLen := int(p[pos]) * 4 // length is in 4-octet units, self-inclusive
+				if extLen == 0 || pos+extLen > len(p) {
+					break
+				}
+				nextType := p[pos+extLen-1] // last octet of the block names the next one
+				pos += extLen
+				if nextType == 0 {
+					break
+				}
+			}
+			hdrLen = pos
+		}
+	}
+
+	n := node(fmt.Sprintf("GPRS Tunneling Protocol, TEID: 0x%08x", teid), off, min(hdrLen, len(p)))
+	r.leaf(n, "Version", "gtp.version", strconv.Itoa(int(version)), off, 1)
+	r.leaf(n, "Message Type: "+gtpMessageTypeName(msgType), "gtp.message_type", strconv.Itoa(int(msgType)), off+1, 1)
+	r.leaf(n, "TEID", "gtp.teid", fmt.Sprintf("0x%08x", teid), off+4, 4)
+	r.layer(n, "gtp")
+
+	if msgType != 0xff {
+		r.Info = "GTP " + gtpMessageTypeName(msgType)
+		return
+	}
+	inner := off + hdrLen
+	if inner >= len(b) {
+		r.Info = "GTP G-PDU (empty)"
+		return
+	}
+	switch b[inner] >> 4 {
+	case 4:
+		dissectIPv4(r, b, inner)
+	case 6:
+		dissectIPv6(r, b, inner)
+	default:
+		r.Info = "GTP G-PDU"
+	}
+}
+
+func gtpMessageTypeName(t uint8) string {
+	switch t {
+	case 1:
+		return "Echo Request"
+	case 2:
+		return "Echo Response"
+	case 16:
+		return "Create PDP Context Request"
+	case 17:
+		return "Create PDP Context Response"
+	case 18:
+		return "Update PDP Context Request"
+	case 19:
+		return "Update PDP Context Response"
+	case 20:
+		return "Delete PDP Context Request"
+	case 21:
+		return "Delete PDP Context Response"
+	case 26:
+		return "Error Indication"
+	case 31:
+		return "Supported Extension Headers Notification"
+	case 255:
+		return "G-PDU"
+	}
+	return fmt.Sprintf("type %d", t)
 }
 
 func dissectMQTT(r *Result, b []byte, off int) {

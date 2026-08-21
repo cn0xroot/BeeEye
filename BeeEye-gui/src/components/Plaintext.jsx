@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { explainFor } from '../protocolExplain'
 
 // Plaintext shows the decrypted HTTPS of the selected packet's process. The
 // gateway can only decrypt its own processes' TLS (uprobes on their OpenSSL
 // library), which is exactly the set the packet list attributes to a pid — so
 // this pane is shown for a local flow and explains itself for a remote one.
-export default function Plaintext({ pid, comm, decryptRunning }) {
+//
+// A SIM/GTP/SCTP packet is never going to have decrypted HTTPS to show here —
+// it usually is not even IP, let alone TLS — so for those, this same "nothing
+// to decrypt" slot shows what the selected message actually does instead, in
+// both English and 中文 at once (see protocolExplain.js).
+export default function Plaintext({ pid, comm, decryptRunning, fields }) {
   const { t } = useTranslation()
+  const explain = !pid ? explainFor(fields) : null
   const [chunks, setChunks] = useState([])
   const [open, setOpen] = useState(null)
   const timer = useRef(null)
@@ -42,10 +49,18 @@ export default function Plaintext({ pid, comm, decryptRunning }) {
       </div>
       <div className="plaintext-body">
         {!pid ? (
-          <div className="empty">
-            <div className="empty-title">{t('plaintext.remoteTitle')}</div>
-            <div className="empty-help">{t('plaintext.remoteHelp')}</div>
-          </div>
+          explain ? (
+            <div className="empty pt-explain">
+              <div className="empty-title">{explain.kind} · {explain.label}</div>
+              <p className="pt-explain-lang"><span className="pt-explain-tag">EN</span>{explain.en}</p>
+              <p className="pt-explain-lang"><span className="pt-explain-tag">中</span>{explain.zh}</p>
+            </div>
+          ) : (
+            <div className="empty">
+              <div className="empty-title">{t('plaintext.remoteTitle')}</div>
+              <div className="empty-help">{t('plaintext.remoteHelp')}</div>
+            </div>
+          )
         ) : chunks.length === 0 ? (
           <div className="empty">
             <div className="empty-title">{t('plaintext.none', { comm: comm || pid })}</div>

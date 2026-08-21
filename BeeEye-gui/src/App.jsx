@@ -283,13 +283,14 @@ export default function App() {
               pid={detail?.summary?.process?.pid || 0}
               comm={detail?.summary?.process?.comm || ''}
               decryptRunning={decryptStatus?.running}
+              fields={detail?.fields}
             />
           </ErrorBoundary>
           </div>
         </div>
       </main>
 
-      <StatusBar status={status} displayed={packets.length} />
+      <StatusBar status={status} />
     </div>
   )
 }

@@ -102,9 +102,11 @@ tlspeek: bpf ## Build the TLS plaintext capture tool (F14; gateway-local only)
 	@echo "then: $(BIN)/BeeEye-tlspeek -list"
 
 .PHONY: build-cuda
-build-cuda: bpf cuda ## Build the analyzer with the CUDA renderer linked in
+build-cuda: bpf cuda ## Build the analyzer and the overview agent with the CUDA renderer linked in
 	cd $(AGENT_DIR) && CGO_ENABLED=1 $(GO) build -tags cuda -o bin/BeeEye-gui-cuda ./cmd/BeeEye-gui
+	cd $(AGENT_DIR) && CGO_ENABLED=1 $(GO) build -tags cuda -o bin/BeeEye-agent-cuda .
 	@echo "built bin/BeeEye-gui-cuda — /api/render/info will report backend=cuda"
+	@echo "built bin/BeeEye-agent-cuda — /api/render/traffic/info will report backend=cuda"
 
 .PHONY: test
 test: bpf ## Run the Go test suite

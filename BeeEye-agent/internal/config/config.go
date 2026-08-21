@@ -55,11 +55,13 @@ type ThreatIntelConfig struct {
 	CacheDir     string   `yaml:"cache_dir"`     // last-good copy, survives a restart with no network
 }
 
-// MITMConfig configures F45's opt-in, user-installed-certificate TLS
-// interception (internal/mitm). Off by default — this is a different trust
-// boundary from the rest of BeeEye (it decrypts HTTPS for whichever device
-// installs the CA and points its proxy setting here), so it never turns
-// itself on; a person has to edit this file to enable it.
+// MITMConfig configures F45's user-installed-certificate TLS interception
+// (internal/mitm). On by default as of 2026-08-20 (explicit user decision,
+// see CHANGELOG) — but "on" here only means the proxy is listening and a CA
+// exists on disk. It decrypts nothing by itself: a device only becomes
+// visible in plaintext once ITS owner installs BeeEye's CA and points that
+// device's own proxy setting at this listener. No device is opted in by
+// turning this flag on; each device opts itself in by trusting the cert.
 type MITMConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Listen  string `yaml:"listen"`  // CONNECT proxy address, e.g. ":8443"
@@ -113,7 +115,7 @@ func Default() *Config {
 	c.ThreatIntel.Feeds = []string{"spamhaus_drop"}
 	c.ThreatIntel.RefreshHours = 24
 	c.ThreatIntel.CacheDir = "./data/threatintel"
-	c.MITM.Enabled = false
+	c.MITM.Enabled = true
 	c.MITM.Listen = ":8443"
 	c.MITM.CADir = "./data/mitm"
 	c.MITM.MaxLog = 500

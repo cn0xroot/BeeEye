@@ -17,7 +17,21 @@
     "autoscroll": "Auto-scroll",
     "autoscrollOn": "Auto-scroll on",
     "autoscrollOff": "Auto-scroll off",
-    "autoscrollHeld": "{{count}} new packets held — resume to see them"
+    "autoscrollHeld": "{{count}} new packets held — resume to see them",
+    "quickFilter": "Quick locate",
+    "quickAdd": "Add to filter",
+    "quickSrc": "Src IP",
+    "quickSrcPlaceholder": "192.168.1.100",
+    "quickDst": "Dst IP",
+    "quickDstPlaceholder": "8.8.8.8",
+    "quickProto": "Protocol",
+    "quickProtoPlaceholder": "tls / dns / http",
+    "quickProcess": "Process",
+    "quickProcessPlaceholder": "curl",
+    "openFile": "Open file",
+    "openFileHint": "Open a .pcap file for offline analysis, like Wireshark's File > Open",
+    "offlineBadge": "Replaying: {{name}}",
+    "offlineHint": "Showing the contents of {{name}}, not live traffic. Click Start to return to live capture."
   },
   "status": {
     "captured": "Captured",

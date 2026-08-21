@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, formatBytes } from '../api'
-import { Table, SeverityTag, CategoryTag, GeoCell, Bytes, When } from './Tables'
+import { Table, SeverityTag, CategoryTag, GeoCell, Bytes, When, TxRxBar } from './Tables'
 import GeoAccuracyBadge from './GeoAccuracyBadge'
 import { BarRows } from './Charts'
 
@@ -104,7 +104,10 @@ export function ConnectionsView({ connections }) {
                 <span className="dim small"> / {c.proto}</span>
               </td>
               <td><GeoCell geo={c.geo} /></td>
-              <td><Bytes value={c.bytes} /></td>
+              <td>
+                <Bytes value={c.bytes} />
+                <TxRxBar tx={c.tx_bytes} rx={c.rx_bytes} />
+              </td>
             </tr>
           )}
         />
@@ -146,7 +149,10 @@ export function IPView({ rows, devices }) {
                 <td><GeoCell geo={r.geo} /></td>
                 <td>{r.devices?.length || 0}</td>
                 <td>{r.protocols?.join(', ')}</td>
-                <td><Bytes value={r.bytes} /></td>
+                <td>
+                  <Bytes value={r.bytes} />
+                  <TxRxBar tx={r.tx_bytes} rx={r.rx_bytes} />
+                </td>
                 <td className="num">{r.conn_count}</td>
               </tr>
               {expanded === r.ip && (

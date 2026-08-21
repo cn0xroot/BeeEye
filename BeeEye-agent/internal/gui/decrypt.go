@@ -14,6 +14,20 @@ import (
 // busy process cannot evict everything else and memory stays bounded.
 const decryptRingPerPID = 200
 
+// rescanInterval controls how often start() re-walks /proc for libraries that
+// were not mapped by any process yet at startup — a venv's own OpenSSL copy,
+// an app installed after BeeEye started, a short-lived tool whose first run
+// lands between scans. Attach is keyed by library path and idempotent, so a
+// rescan only ever adds targets, never repeats work for one already probed.
+const rescanInterval = 20 * time.Second
+
+// pathScanDeadline bounds the one-time $PATH sweep (tlspeek.ScanPathBinaries)
+// that runs after start(). It resolves every PATH entry's dynamic libraries
+// via ldd, which on a large language-runtime bin/ directory can be thousands
+// of files — generous because it runs in the background and nothing waits on
+// it, but bounded because it must eventually give up on stragglers.
+const pathScanDeadline = 20 * time.Second
+
 // PlaintextChunk is one decrypted piece of a process's TLS traffic, shaped for
 // the API. It carries the process so the UI can line it up with the packet
 // list, which already attributes gateway-local flows to the same pid.
@@ -127,42 +141,111 @@ func (d *Decryptor) start() {
 		d.lastErr = err.Error()
 		d.mu.Unlock()
 	}
+	stop := make(chan struct{})
+	d.mu.Lock()
+	d.peeker = peeker
+	d.stop = stop
+	d.mu.Unlock()
+
 	// Attach to every library a decryption rule matches (OpenSSL, GnuTLS, …).
 	// The rule table (tlspeek/rules.go) is the single place that list lives, so
 	// this loop needs no change when a library family is added; libcrypto and
 	// other non-matching objects are simply not returned as attach targets.
-	attached := 0
+	// attachAll updates d.attached/d.running/d.lastErr on success; the "no
+	// library yet" message below only fires when it found nothing to say.
+	attached, _ := d.attachAll(peeker, libs)
+	if attached == 0 {
+		d.mu.Lock()
+		if d.lastErr == "" {
+			d.lastErr = "no OpenSSL-family library is currently in use to attach to"
+		}
+		d.mu.Unlock()
+	}
+
+	if attached > 0 {
+		log.Printf("gui: HTTPS decryption on — probing %d OpenSSL librar%s", attached, plural(attached))
+	}
+
+	// Kept running even when attached == 0: a rescan can still pick up a
+	// library that starts being used later, so there is nothing fatal about
+	// today's system not doing any TLS yet.
+	go d.drain(peeker.Events(), stop)
+	go d.rescan(peeker, stop)
+	go d.pathScan(peeker, stop)
+}
+
+// attachAll attaches every rule-matching library in libs (pid 0 — every
+// process using it, present or future) and reconciles d's reported state
+// against the peeker's own attached-target count, which is the single source
+// of truth once several scans (runtime, PATH, periodic rescan) are all
+// feeding the same peeker. Returns the total now attached and how many of
+// those are new since this call started.
+func (d *Decryptor) attachAll(peeker *tlspeek.Peeker, libs []tlspeek.Library) (total, gained int) {
+	before := len(peeker.Targets())
 	for _, lib := range libs {
 		if lib.Family == "" {
 			continue // no rule matches; not a decryption target
 		}
-		// pid 0 = every process using this library, so traffic from processes
-		// started after us is decrypted too.
 		if err := peeker.Attach(lib.Path, 0); err != nil {
 			log.Printf("gui: attach %s (%s): %v", lib.Path, lib.Family, err)
-			continue
 		}
-		attached++
 	}
+	total = len(peeker.Targets())
+	gained = total - before
 
-	stop := make(chan struct{})
 	d.mu.Lock()
-	d.peeker = peeker
-	d.attached = attached
-	d.running = attached > 0
-	d.stop = stop
-	if attached == 0 && d.lastErr == "" {
-		d.lastErr = "no OpenSSL-family library is currently in use to attach to"
+	d.attached = total
+	if total > 0 {
+		d.running = true
+		d.lastErr = ""
 	}
 	d.mu.Unlock()
+	return total, gained
+}
 
-	if attached == 0 {
-		peeker.Close()
-		return
+// rescan periodically re-walks /proc, attaching to any decryption-rule-
+// matching library not already probed. It exists because start()'s own scan
+// only sees processes running at that exact moment — a library first used by
+// a process that starts afterwards (a venv's own OpenSSL, an app installed
+// later, a short-lived tool that just hadn't run yet) would otherwise be
+// invisible until BeeEye itself restarts.
+func (d *Decryptor) rescan(peeker *tlspeek.Peeker, stop <-chan struct{}) {
+	ticker := time.NewTicker(rescanInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+
+		libs, err := tlspeek.FindLibraries()
+		if err != nil {
+			continue
+		}
+		if _, gained := d.attachAll(peeker, libs); gained > 0 {
+			log.Printf("gui: HTTPS decryption rescan found %d new librar%s", gained, plural(gained))
+		}
 	}
-	log.Printf("gui: HTTPS decryption on — probing %d OpenSSL librar%s", attached, plural(attached))
+}
 
-	go d.drain(peeker.Events(), stop)
+// pathScan runs once, asynchronously, after start() has already attached to
+// whatever is running right now — see tlspeek.ScanPathBinaries for why this
+// exists: a short-lived command (curl, any one-shot CLI tool) or a language
+// runtime's own bundled library (a conda/venv Python's libssl.so, not the
+// system one) that nothing has loaded yet would otherwise never be seen by
+// the /proc-based scans, no matter how often they repeat. It does not block
+// start() because resolving a large $PATH can take several seconds.
+func (d *Decryptor) pathScan(peeker *tlspeek.Peeker, stop <-chan struct{}) {
+	libs := tlspeek.ScanPathBinaries(pathScanDeadline)
+	select {
+	case <-stop:
+		return // decryption was disabled while the scan was running
+	default:
+	}
+	if _, gained := d.attachAll(peeker, libs); gained > 0 {
+		log.Printf("gui: HTTPS decryption PATH scan found %d additional librar%s", gained, plural(gained))
+	}
 }
 
 func (d *Decryptor) drain(events <-chan *tlspeek.Event, stop <-chan struct{}) {

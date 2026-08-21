@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -56,6 +57,35 @@ type Server struct {
 	// actually listening — the CA-download and status endpoints answer a
 	// clear "not enabled" error rather than a generic 404 when it's off.
 	mitmProxy atomic.Pointer[mitm.Proxy]
+
+	// rate feeds the overview's GPU-rendered traffic-trend curve (F7). Always
+	// present (not nil until some later wiring step, unlike tcap/mitmProxy):
+	// it has nothing to plot until AddTrafficBytes is called, but an empty
+	// curve is a fine answer and the render endpoints should work from the
+	// moment the server starts.
+	rate *trafficRate
+
+	// ifaceRateState is the NIC card's own throughput sampler (iface_info.go)
+	// — separate from rate above, which is BeeEye's own dissected-packet
+	// count, not the kernel's per-NIC counters this reads instead.
+	ifaceRateState ifaceRate
+
+	// pcapImporter replays an uploaded capture file through the live pipeline
+	// (livesource.ImportFile) so the overview reflects it, not just the
+	// simulated/live-captured history already in the store. Wired by main
+	// once st exists — same atomic-pointer treatment as tcap/mitmProxy above,
+	// since it is read from an HTTP handler goroutine.
+	pcapImporter atomic.Pointer[func(io.Reader, string) error]
+
+	// importedAt records, per imported filename, the wall-clock moment
+	// pcapImport accepted it — not the packet timestamps inside the file
+	// (which for a genuinely historical capture can be days or months old,
+	// and which store.ImportBatches.Last already reports). Without this the
+	// overview has no way to say "you just imported this" versus "this
+	// import has been sitting in the store for a week" — the file's own
+	// timestamps can't distinguish the two.
+	importMu   sync.Mutex
+	importedAt map[string]time.Time
 }
 
 type sourceInfo struct {
@@ -65,10 +95,16 @@ type sourceInfo struct {
 }
 
 func New(st *store.Store, cfg *config.Config) *Server {
-	s := &Server{st: st, cfg: cfg, reports: analyze.NewStore(10)}
+	s := &Server{st: st, cfg: cfg, reports: analyze.NewStore(10), rate: newTrafficRate(), importedAt: map[string]time.Time{}}
 	s.src.Store(&sourceInfo{name: "simulated"})
+	go s.rate.run()
 	return s
 }
+
+// AddTrafficBytes credits tx/rx bytes to the current traffic-trend sample.
+// Called from the capture pipeline's own goroutine on the hot path (see
+// livesource.Pipeline.SetByteSampler) — never from an HTTP handler.
+func (s *Server) AddTrafficBytes(tx, rx int64) { s.rate.Add(tx, rx) }
 
 // SetSource records whether the overview's data is a live capture or the
 // simulated scenario. Called at startup, and again by the hot-plug
@@ -89,6 +125,14 @@ func (s *Server) SetTargetedCapture(m *tcapture.Manager) { s.tcap.Store(m) }
 // dereference.
 func (s *Server) SetMITM(p *mitm.Proxy) { s.mitmProxy.Store(p) }
 
+// SetPcapImporter wires in the function that replays an uploaded capture file
+// into the live store (main supplies a closure over livesource.ImportFile).
+// Until this is called, POST /api/pcap/import answers "not available" rather
+// than silently accepting an upload it cannot do anything with.
+func (s *Server) SetPcapImporter(fn func(io.Reader, string) error) {
+	s.pcapImporter.Store(&fn)
+}
+
 // Routes builds the HTTP handler (Go 1.22 pattern-based ServeMux, no router dep).
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
@@ -96,6 +140,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/summary", s.summary)
 	mux.HandleFunc("GET /api/config", s.getConfig)
 	mux.HandleFunc("GET /api/source", s.getSource)
+	mux.HandleFunc("GET /api/iface/info", s.ifaceInfo)
 	mux.HandleFunc("GET /api/devices", s.devices)
 	mux.HandleFunc("POST /api/devices/{mac}/ack", s.ackDevice)
 	mux.HandleFunc("POST /api/devices/{mac}/category", s.setCategory)
@@ -108,6 +153,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/views/topn", s.topN)
 	mux.HandleFunc("GET /api/views/geopairs", s.geoPairs)
 	mux.HandleFunc("GET /api/timeseries", s.timeseries)
+	mux.HandleFunc("GET /api/render/traffic.png", s.trafficFrame)
+	mux.HandleFunc("GET /api/render/traffic/info", s.trafficRenderInfo)
+	mux.HandleFunc("GET /api/render/traffic/series", s.trafficSeries)
 	mux.HandleFunc("GET /api/export", s.export)
 	mux.HandleFunc("GET /api/geoip", s.geoipLookup)
 	mux.HandleFunc("GET /api/geoip/status", s.geoipStatus)
@@ -117,6 +165,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/pcap", s.pcapList)
 	mux.HandleFunc("GET /api/pcap/{id}", s.pcapReport)
 	mux.HandleFunc("GET /api/pcap/{id}/files/{fid}", s.pcapFile)
+	// Distinct from /api/pcap/upload above: that one produces a one-off,
+	// in-memory forensics report (analyze.Report); this one folds the file's
+	// devices/connections/DNS into the persistent store so the overview
+	// itself reflects the imported capture, same as it would live traffic.
+	mux.HandleFunc("POST /api/pcap/import", s.pcapImport)
+	mux.HandleFunc("GET /api/pcap/imports", s.pcapImports)
 
 	// On-demand targeted capture (F11): a fresh, MAC-filtered pcap distinct
 	// from a snapshot of the rolling ring buffer.
@@ -125,7 +179,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/capture/targeted/{id}", s.targetedCaptureStatus)
 	mux.HandleFunc("GET /api/capture/targeted/{id}/download", s.targetedCaptureDownload)
 
-	// Opt-in MITM decryption (F45) — off unless mitm.enabled is set.
+	// MITM decryption (F45), gated on mitm.enabled — see MITMConfig's doc comment.
 	mux.HandleFunc("GET /api/mitm/status", s.mitmStatus)
 	mux.HandleFunc("GET /api/mitm/ca.pem", s.mitmCA)
 	mux.HandleFunc("GET /api/mitm/ca.mobileconfig", s.mitmMobileConfig)
@@ -180,24 +234,29 @@ func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
 	for _, e := range evts {
 		sev[string(e.Severity)]++
 	}
-	conns, _ := s.st.Connections(store.ConnFilter{Limit: 100000})
-	var totalBytes int64
-	internal := 0
-	for _, c := range conns {
-		totalBytes += c.Bytes
-		if c.Internal {
-			internal++
-		}
-	}
+	// iface scopes the traffic-derived numbers to one imported batch (see
+	// ConnFilter.Iface's comment) — device/event counts stay global: a
+	// device is still "your device" and an alert still fired regardless of
+	// which capture happened to be selected when someone looked.
+	//
+	// A SQL-side aggregate (ConnectionTotals), not Connections' full
+	// 100000-row fetch summed in Go — this endpoint is polled every 3s by
+	// every open overview tab, and a live capture's connections table only
+	// grows, so a full-row fetch here gets slower for as long as the capture
+	// keeps running until it is the reason the page shows "Loading…" far
+	// more than a moment.
+	totals, _ := s.st.ConnectionTotals(r.URL.Query().Get("iface"))
 	writeJSON(w, map[string]any{
 		"device_count":     len(devs),
 		"new_devices":      newDevices,
 		"category_count":   catCount,
 		"event_count":      len(evts),
 		"severity_count":   sev,
-		"connection_count": len(conns),
-		"internal_flows":   internal,
-		"total_bytes":      totalBytes,
+		"connection_count": totals.Count,
+		"total_tx_bytes":   totals.TotalTx,
+		"total_rx_bytes":   totals.TotalRx,
+		"internal_flows":   totals.Internal,
+		"total_bytes":      totals.TotalBytes,
 	})
 }
 
@@ -258,6 +317,7 @@ func parseFilter(q url.Values, defLimit int) store.ConnFilter {
 		}
 	}
 	f.InternalOnly = q.Get("internal") == "1"
+	f.Iface = q.Get("iface")
 	return f
 }
 
@@ -289,7 +349,15 @@ func (s *Server) connections(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dns(w http.ResponseWriter, r *http.Request) {
-	recs, err := s.st.DNSRecords(r.URL.Query().Get("mac"), atoiDefault(r.URL.Query().Get("limit"), 500))
+	mac := r.URL.Query().Get("mac")
+	limit := atoiDefault(r.URL.Query().Get("limit"), 500)
+	var recs []model.DNSRecord
+	var err error
+	if iface := r.URL.Query().Get("iface"); iface != "" {
+		recs, err = s.st.DNSRecordsForIface(mac, iface, limit)
+	} else {
+		recs, err = s.st.DNSRecords(mac, limit)
+	}
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -346,14 +414,40 @@ func (s *Server) ackEvent(w http.ResponseWriter, r *http.Request) {
 // view needs to draw a source→destination arc: nothing about the connection
 // itself, just where it went and roughly how big it was.
 type GeoPair struct {
-	DstIP   string    `json:"dst_ip"`
-	Lat     float64   `json:"lat"`
-	Lon     float64   `json:"lon"`
-	Country string    `json:"country"`
-	City    string    `json:"city"`
-	Domain  string    `json:"domain"`
-	Proto   string    `json:"proto"`
-	Bytes   int64     `json:"bytes"`
+	DstIP   string  `json:"dst_ip"`
+	Lat     float64 `json:"lat"`
+	Lon     float64 `json:"lon"`
+	Country string  `json:"country"`
+	// Region is the subdivision (province/state) name — only ever
+	// non-empty when a City-tier GeoIP database is loaded (see
+	// geoip.Status.HasCity); a Country-tier one (the common case: this is
+	// what Clash's bundled Country.mmdb is) has no subdivision data to
+	// report, and this stays honestly blank rather than guessing.
+	Region string `json:"region,omitempty"`
+	City   string `json:"city"`
+	Domain string `json:"domain"`
+	Proto  string `json:"proto"`
+	Bytes  int64  `json:"bytes"`
+	// SrcIP/SrcCountry/SrcRegion/SrcCity describe the flow's OTHER end, only
+	// populated when it is itself a real, non-local address with a
+	// resolvable point — routed/relayed traffic this gateway is not the
+	// endpoint of (most visibly, a GTP tunnel's inner packet after
+	// dissect.dissectGTP unwraps it, where neither inner address is this
+	// LAN). For the overwhelming common case — a LAN device talking out —
+	// the source IS this gateway's own private address, geoip.Lookup
+	// correctly calls that Local, and these stay blank rather than reporting
+	// a meaningless "source: this network" on every single point.
+	SrcIP      string `json:"src_ip,omitempty"`
+	SrcCountry string `json:"src_country,omitempty"`
+	SrcRegion  string `json:"src_region,omitempty"`
+	SrcCity    string `json:"src_city,omitempty"`
+	// TxBytes/RxBytes split Bytes by direction (model.Connection's own
+	// fields, carried through unchanged) so the world map can show which
+	// way traffic to this destination is actually flowing — an upload-heavy
+	// backup target and a download-heavy CDN edge look identical in Bytes
+	// alone.
+	TxBytes int64     `json:"tx_bytes"`
+	RxBytes int64     `json:"rx_bytes"`
 	TS      time.Time `json:"ts"`
 }
 
@@ -366,10 +460,21 @@ type GeoPair struct {
 // so this endpoint stays a plain snapshot rather than a push stream.
 func (s *Server) geoPairs(w http.ResponseWriter, r *http.Request) {
 	limit := atoiDefault(r.URL.Query().Get("limit"), 150)
-	// Over-fetch: most rows on a home network are internal or already-seen
-	// repeat destinations, so asking the store for exactly `limit` would
-	// starve the response on a chatty LAN.
-	conns, err := s.st.Connections(store.ConnFilter{Limit: limit * 8})
+	f := store.ConnFilter{Limit: limit * 8}
+	// Over-fetch by default: most rows on a home network are internal or
+	// already-seen repeat destinations, so asking the store for exactly
+	// `limit` would starve the response on a chatty LAN. But that recency
+	// window is exactly what buries an imported capture (F-import-visible):
+	// its rows carry the file's own original timestamps, which on live
+	// traffic's constantly-refreshing "now" quickly age past whatever the
+	// last `limit*8` rows are. Scoping to one iface (imported filename)
+	// sidesteps the problem instead of trying to out-fetch a live pipeline
+	// that never stops adding fresher rows.
+	if iface := r.URL.Query().Get("iface"); iface != "" {
+		f.Iface = iface
+		f.Limit = 100000
+	}
+	conns, err := s.st.Connections(f)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -384,8 +489,12 @@ func (s *Server) geoPairs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		gp := GeoPair{
-			DstIP: c.DstIP, Lat: geo.Lat, Lon: geo.Lon, Country: geo.Country, City: geo.City,
-			Proto: firstNonEmpty(c.AppProtocol, c.Proto), Bytes: c.Bytes, TS: c.TS,
+			DstIP: c.DstIP, Lat: geo.Lat, Lon: geo.Lon, Country: geo.Country, Region: geo.Region, City: geo.City,
+			Proto: firstNonEmpty(c.AppProtocol, c.Proto), Bytes: c.Bytes,
+			TxBytes: c.TxBytes, RxBytes: c.RxBytes, TS: c.TS,
+		}
+		if srcGeo := geoip.Lookup(c.SrcIP); !srcGeo.Local && (srcGeo.Lat != 0 || srcGeo.Lon != 0) {
+			gp.SrcIP, gp.SrcCountry, gp.SrcRegion, gp.SrcCity = c.SrcIP, srcGeo.Country, srcGeo.Region, srcGeo.City
 		}
 		if d, ok := s.st.DomainForIP(c.DstIP); ok {
 			gp.Domain = d
@@ -408,7 +517,7 @@ func firstNonEmpty(vals ...string) string {
 
 // ipView aggregates connections by destination IP (F25).
 func (s *Server) ipView(w http.ResponseWriter, r *http.Request) {
-	conns, _ := s.st.Connections(store.ConnFilter{Limit: 100000})
+	conns, _ := s.st.Connections(store.ConnFilter{Limit: 100000, Iface: r.URL.Query().Get("iface")})
 	type agg struct {
 		IP        string         `json:"ip"`
 		Domain    string         `json:"domain"`
@@ -417,6 +526,8 @@ func (s *Server) ipView(w http.ResponseWriter, r *http.Request) {
 		Protocols []string       `json:"protocols"`
 		Ports     map[int]string `json:"ports"`
 		Bytes     int64          `json:"bytes"`
+		TxBytes   int64          `json:"tx_bytes"`
+		RxBytes   int64          `json:"rx_bytes"`
 		ConnCount int            `json:"conn_count"`
 		FirstSeen time.Time      `json:"first_seen"`
 		LastSeen  time.Time      `json:"last_seen"`
@@ -438,6 +549,8 @@ func (s *Server) ipView(w http.ResponseWriter, r *http.Request) {
 			protoSet[c.DstIP] = map[string]bool{}
 		}
 		a.Bytes += c.Bytes
+		a.TxBytes += c.TxBytes
+		a.RxBytes += c.RxBytes
 		a.ConnCount++
 		a.Ports[c.DstPort] = c.Service
 		devSet[c.DstIP][c.MAC] = true
@@ -461,7 +574,7 @@ func (s *Server) ipView(w http.ResponseWriter, r *http.Request) {
 
 // protocolView aggregates by application protocol (F26).
 func (s *Server) protocolView(w http.ResponseWriter, r *http.Request) {
-	conns, _ := s.st.Connections(store.ConnFilter{Limit: 100000})
+	conns, _ := s.st.Connections(store.ConnFilter{Limit: 100000, Iface: r.URL.Query().Get("iface")})
 	type agg struct {
 		Protocol   string         `json:"protocol"`
 		Bytes      int64          `json:"bytes"`
@@ -504,7 +617,7 @@ func (s *Server) topN(w http.ResponseWriter, r *http.Request) {
 		dim = "device"
 	}
 	n := atoiDefault(r.URL.Query().Get("n"), 10)
-	conns, _ := s.st.Connections(store.ConnFilter{Limit: 100000})
+	conns, _ := s.st.Connections(store.ConnFilter{Limit: 100000, Iface: r.URL.Query().Get("iface")})
 	bytesBy := map[string]int64{}
 	for _, c := range conns {
 		switch dim {
@@ -708,6 +821,74 @@ func (s *Server) pcapUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	id := s.reports.Put(rep)
 	writeJSON(w, map[string]any{"id": id, "report": rep})
+}
+
+// maxPcapImportBytes mirrors maxUploadBytes above — a fresh limit rather than
+// reusing that constant because the two endpoints are unrelated in purpose
+// even though the risk (an unbounded upload) is the same.
+const maxPcapImportBytes = 256 << 20
+
+func (s *Server) pcapImport(w http.ResponseWriter, r *http.Request) {
+	fn := s.pcapImporter.Load()
+	if fn == nil {
+		writeErrStatus(w, http.StatusServiceUnavailable,
+			fmt.Errorf("pcap import is not available (no store to import into)"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxPcapImportBytes)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeErrStatus(w, http.StatusBadRequest, err)
+		return
+	}
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		writeErrStatus(w, http.StatusBadRequest, err)
+		return
+	}
+	defer file.Close()
+
+	if err := (*fn)(file, hdr.Filename); err != nil {
+		writeErrStatus(w, http.StatusBadRequest, err)
+		return
+	}
+	// Keyed by the exact string livefile.Source.Iface() reports (the
+	// filename), which is also what ends up in each imported Connection's
+	// Iface column — see ConnFilter.Iface and pcapImports below.
+	s.importMu.Lock()
+	s.importedAt[hdr.Filename] = time.Now()
+	s.importMu.Unlock()
+	// The import runs in the background (see livesource.ImportFile) and
+	// finishes on its own schedule — this just confirms the file parsed and
+	// replay started, the same "eventually consistent" contract the overview
+	// already has with the live pipeline's own flush interval.
+	writeJSON(w, map[string]any{"status": "importing"})
+}
+
+// pcapImports lists the distinct imported-capture batches sitting in the
+// store (see store.ConnFilter.Iface's comment) so the overview can offer
+// "show me just what I imported" instead of that data being invisible
+// whenever live traffic has pushed it out of the default recency window.
+func (s *Server) pcapImports(w http.ResponseWriter, r *http.Request) {
+	live := ""
+	if src := s.src.Load(); src != nil {
+		live = src.iface
+	}
+	batches, err := s.st.ImportBatches(live)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.importMu.Lock()
+	defer s.importMu.Unlock()
+	type importBatchOut struct {
+		store.ImportBatch
+		ImportedAt time.Time `json:"imported_at,omitempty"`
+	}
+	out := make([]importBatchOut, len(batches))
+	for i, b := range batches {
+		out[i] = importBatchOut{ImportBatch: b, ImportedAt: s.importedAt[b.Iface]}
+	}
+	writeJSON(w, out)
 }
 
 func (s *Server) pcapList(w http.ResponseWriter, r *http.Request) {
@@ -922,11 +1103,26 @@ or in dev use <code>npm run dev</code> (proxied to this API).</p>
 </body></html>`))
 			return
 		}
+		// index.html is the only file whose content is not addressed by its own
+		// name — it is what decides which hashed /assets/*.js a browser loads
+		// next, so it must always be revalidated. Serving it under a heuristic
+		// (no explicit Cache-Control) cache lets a browser go on running a
+		// stale bundle for a long time after a redeploy — indistinguishable
+		// from "the fix didn't actually ship" to whoever is looking at it.
+		// Hashed assets are the opposite case: their filename changes the
+		// moment their content does, so caching them for as long as a browser
+		// likes is always safe.
 		path := filepath.Join(dir, filepath.Clean(r.URL.Path))
 		if fi, err := os.Stat(path); err == nil && !fi.IsDir() {
+			if strings.HasPrefix(r.URL.Path, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
+			}
 			http.ServeFile(w, r, path)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 	})
 }

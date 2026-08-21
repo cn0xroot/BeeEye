@@ -296,7 +296,7 @@ flowchart LR
 | `GET /api/mitm/exchanges` | 最近解密的请求/响应列表（内存环形缓冲，重启即清空，同 `internal/analyze.Store` 的设计考虑——这是本项目处理过的最敏感数据，绝不落盘） |
 | `GET /api/mitm/exchanges/{id}` | 单条完整记录，含请求头/响应头与 body（base64） |
 
-默认关闭（`mitm.enabled: false`），需要在 `config.yaml` 显式打开并重启。
+**2026-08-20 更新：默认开启**（`mitm.enabled: true`）——用户明确要求把它并入"默认启用解密"的范围，见 CHANGELOG。**这一步只是让代理监听并生成 CA，不解密任何设备的任何流量**：解密只在某台设备的主人主动安装这份 CA、并把该设备自己的代理设置指向这个监听地址之后才开始，对其它未配置的设备完全透明、没有任何影响。要关闭，把 `config/config.yaml` 里的 `mitm.enabled` 改回 `false` 并重启。
 
 ### 各平台"装了证书之后"的差异——这一步比证书格式本身更容易踩坑
 

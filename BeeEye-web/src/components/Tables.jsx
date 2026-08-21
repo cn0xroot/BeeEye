@@ -63,6 +63,25 @@ export function Bytes({ value }) {
   return <span className="num">{formatBytes(value)}</span>
 }
 
+// TxRxBar is the thin tx/rx proportion strip sniffnet draws under every row
+// of its host/service/program lists — the same amber/blue split the traffic
+// trend chart uses, so a glance at the bar (not just the raw byte count)
+// says whether a talker is upload- or download-heavy. Renders nothing when
+// there is no directional data at all (older rows from before TxBytes/
+// RxBytes existed, or a flow with no local endpoint) rather than a
+// misleading empty/grey bar.
+export function TxRxBar({ tx, rx }) {
+  const total = (tx || 0) + (rx || 0)
+  if (total <= 0) return null
+  const txPct = (100 * (tx || 0)) / total
+  return (
+    <div className="txrx-bar" title={`${formatBytes(tx || 0)} out · ${formatBytes(rx || 0)} in`}>
+      <div className="txrx-tx" style={{ width: `${txPct}%` }} />
+      <div className="txrx-rx" style={{ width: `${100 - txPct}%` }} />
+    </div>
+  )
+}
+
 export function When({ value }) {
   const { i18n } = useTranslation()
   return <span className="dim num">{formatTime(value, i18n.resolvedLanguage)}</span>
