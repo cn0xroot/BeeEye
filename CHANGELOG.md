@@ -4,8 +4,6 @@ All notable changes to BeeEye are documented in this file.
 
 [中文](CHANGELOG.zh-CN.md)
 
-## [Unreleased]
-
 ## [1.2.0] — 2026-08-21
 
 ### Added
