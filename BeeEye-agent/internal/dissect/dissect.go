@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"BeeEye/internal/live"
+	"BeeEye/internal/pcapfile"
 )
 
 // Node is one row of the protocol tree. Offset/Length point back into the raw
@@ -144,7 +145,27 @@ func (d *Dissector) Packet(p live.Packet) *Result {
 	r.set("frame.len", strconv.Itoa(p.OrigLen))
 	r.set("frame.interface_name", p.Iface)
 	r.set("frame.number", strconv.FormatInt(p.Index, 10))
-	dissectEthernet(r, p.Data, 0)
+	// Live capture (AF_PACKET/eBPF on a physical or wireless NIC) never sets
+	// LinkType — it is always genuine Ethernet framing — so the zero value
+	// takes the same path as an explicit LinkEthernet. Only a replayed
+	// capture file (livefile) can carry anything else: a tunnel/VPN
+	// interface's dump is commonly raw IP with no link header at all, and
+	// dissecting that as Ethernet was silently misreading the IP header's
+	// own bytes as a bogus MAC pair — see the "vti"/tunnel-capture import
+	// this was written for.
+	switch p.LinkType {
+	case 0, pcapfile.LinkEthernet:
+		dissectEthernet(r, p.Data, 0)
+	case pcapfile.LinkRaw, pcapfile.LinkRawBSD:
+		dissectRawLink(r, p.Data)
+	case pcapfile.LinkLinuxSLL:
+		dissectLinuxSLL(r, p.Data)
+	default:
+		// An encapsulation this analyzer does not specifically know —
+		// Ethernet is still the best guess (it is what nearly every capture
+		// actually is) rather than leaving the frame entirely undissected.
+		dissectEthernet(r, p.Data, 0)
+	}
 	if r.Info == "" {
 		r.Info = r.Proto
 	}
@@ -200,6 +221,47 @@ func dissectEthernet(r *Result, b []byte, off int) {
 		dissectIPv6(r, b, next)
 	case 0x0806:
 		dissectARP(r, b, next)
+	}
+}
+
+// dissectRawLink handles LINKTYPE_RAW / DLT_RAW (pcapfile.LinkRaw and
+// LinkRawBSD): the frame *is* an IP packet, with no link-layer header of any
+// kind in front of it — common for a dump taken on a tunnel/VPN interface
+// (vtiN, tun, ppp) rather than a physical or wireless NIC. There is no
+// EtherType to dispatch on, so the only signal available is the IP version
+// nibble in the very first byte, which both IPv4 and IPv6 headers carry in
+// the same place.
+func dissectRawLink(r *Result, b []byte) {
+	if len(b) < 1 {
+		return
+	}
+	switch b[0] >> 4 {
+	case 4:
+		dissectIPv4(r, b, 0)
+	case 6:
+		dissectIPv6(r, b, 0)
+	}
+}
+
+// dissectLinuxSLL handles LINKTYPE_LINUX_SLL (pcapfile.LinkLinuxSLL) — the
+// 16-byte "Linux cooked capture" pseudo-header tcpdump/dumpcap synthesize
+// when capturing on the "any" pseudo-interface, since there is no single
+// real link layer to report across every interface at once. Layout (all
+// big-endian): packet type(2), ARPHRD_* device type(2), address length(2),
+// address(8, only the first `address length` bytes meaningful), protocol —
+// an EtherType value(2) — then the payload.
+func dissectLinuxSLL(r *Result, b []byte) {
+	if len(b) < 16 {
+		return
+	}
+	proto := binary.BigEndian.Uint16(b[14:16])
+	switch proto {
+	case 0x0800:
+		dissectIPv4(r, b, 16)
+	case 0x86dd:
+		dissectIPv6(r, b, 16)
+	case 0x0806:
+		dissectARP(r, b, 16)
 	}
 }
 
@@ -336,6 +398,8 @@ func ipProtoName(p uint8) string {
 		return "ICMPv6 (58)"
 	case 2:
 		return "IGMP (2)"
+	case 132:
+		return "SCTP (132)"
 	}
 	return fmt.Sprintf("%d", p)
 }
@@ -350,6 +414,8 @@ func dissectTransport(r *Result, b []byte, off int, proto uint8) {
 		dissectUDP(r, b, off)
 	case 1, 58:
 		dissectICMP(r, b, off, proto)
+	case 132:
+		dissectSCTP(r, b, off)
 	}
 }
 
@@ -481,6 +547,123 @@ func dissectICMP(r *Result, b []byte, off int, proto uint8) {
 	default:
 		r.Info = fmt.Sprintf("Type=%d Code=%d", typ, code)
 	}
+}
+
+// dissectSCTP parses RFC 4960: a fixed 12-byte common header (no length
+// field of its own — SCTP relies on the IP layer for that) followed by one
+// or more chunks, each type(1) flags(1) length(2) value(length-4), padded to
+// a 4-byte boundary. Telecom signaling (SS7-over-IP via SIGTRAN, S1AP/NGAP
+// on a mobile core's control plane, and similar) commonly rides on SCTP
+// rather than TCP/UDP — the association's own reliability and multi-stream
+// framing is why SIGTRAN chose it — so a capture from that world showed only
+// "IPv4, protocol 132" with no further detail until this existed.
+//
+// The higher-layer protocol carried inside DATA chunks (identified by its
+// Payload Protocol Identifier) is reported as a bare number rather than
+// resolved to a name: IANA's SCTP PPID registry is large and this analyzer
+// would rather show "ppid=18" honestly than guess wrong and label someone's
+// traffic with the wrong telecom protocol.
+func dissectSCTP(r *Result, b []byte, off int) {
+	if len(b) < off+12 {
+		return
+	}
+	sport := binary.BigEndian.Uint16(b[off : off+2])
+	dport := binary.BigEndian.Uint16(b[off+2 : off+4])
+	vtag := binary.BigEndian.Uint32(b[off+4 : off+8])
+
+	r.proto("sctp")
+	r.Proto = "SCTP"
+	r.Transport = "sctp"
+	r.SrcPort, r.DstPort = int(sport), int(dport)
+	r.set("sctp.srcport", strconv.Itoa(int(sport)))
+	r.set("sctp.dstport", strconv.Itoa(int(dport)))
+	r.set("sctp.port", strconv.Itoa(int(sport)))
+	r.set("sctp.port", strconv.Itoa(int(dport)))
+	r.set("sctp.verification_tag", fmt.Sprintf("0x%08x", vtag))
+
+	n := node(fmt.Sprintf("Stream Control Transmission Protocol, Src Port: %d, Dst Port: %d", sport, dport), off, 12)
+	r.leaf(n, "Source Port", "sctp.srcport", strconv.Itoa(int(sport)), off, 2)
+	r.leaf(n, "Destination Port", "sctp.dstport", strconv.Itoa(int(dport)), off+2, 2)
+	r.leaf(n, "Verification Tag", "sctp.verification_tag", fmt.Sprintf("0x%08x", vtag), off+4, 4)
+
+	q := off + 12
+	var names []string
+	// Bounded, not just by len(b): a corrupt or hostile chunk-length chain
+	// must not be able to spin this loop forever the way it could with only
+	// the slice-length check below.
+	for chunks := 0; q+4 <= len(b) && chunks < 64; chunks++ {
+		ctype := b[q]
+		cflags := b[q+1]
+		clen := int(binary.BigEndian.Uint16(b[q+2 : q+4]))
+		if clen < 4 {
+			break
+		}
+		chunkEnd := min(q+clen, len(b))
+		name := sctpChunkName(ctype)
+		names = append(names, name)
+
+		c := node(name+" chunk", q, chunkEnd-q)
+		r.leaf(c, "Chunk Type: "+name, "sctp.chunk_type", name, q, 1)
+		r.leaf(c, "Chunk Flags", "sctp.chunk_flags", fmt.Sprintf("0x%02x", cflags), q+1, 1)
+		r.leaf(c, "Chunk Length", "sctp.chunk_length", strconv.Itoa(clen), q+2, 2)
+
+		// DATA's own header: TSN(4) StreamID(2) StreamSeq(2) PPID(4), then
+		// the user payload — the one chunk type worth reaching into, since
+		// its fields are what actually identifies the higher-layer traffic.
+		if ctype == 0 && chunkEnd >= q+16 {
+			tsn := binary.BigEndian.Uint32(b[q+4 : q+8])
+			sid := binary.BigEndian.Uint16(b[q+8 : q+10])
+			ppid := binary.BigEndian.Uint32(b[q+12 : q+16])
+			r.leaf(c, "TSN", "sctp.data_tsn", strconv.FormatUint(uint64(tsn), 10), q+4, 4)
+			r.leaf(c, "Stream Identifier", "sctp.data_sid", strconv.Itoa(int(sid)), q+8, 2)
+			r.leaf(c, "Payload Protocol Identifier", "sctp.data_ppid", strconv.FormatUint(uint64(ppid), 10), q+12, 4)
+			r.set("sctp.data_sid", strconv.Itoa(int(sid)))
+			r.set("sctp.data_ppid", strconv.FormatUint(uint64(ppid), 10))
+		}
+
+		n.Children = append(n.Children, c)
+		// Chunks are padded to a 4-byte boundary; that padding is not part
+		// of whatever chunk comes next.
+		q += (clen + 3) &^ 3
+	}
+	r.layer(n, "sctp")
+	if len(names) > 0 {
+		r.Info = strings.Join(names, ", ")
+	} else {
+		r.Info = "SCTP"
+	}
+}
+
+func sctpChunkName(t uint8) string {
+	switch t {
+	case 0:
+		return "DATA"
+	case 1:
+		return "INIT"
+	case 2:
+		return "INIT_ACK"
+	case 3:
+		return "SACK"
+	case 4:
+		return "HEARTBEAT"
+	case 5:
+		return "HEARTBEAT_ACK"
+	case 6:
+		return "ABORT"
+	case 7:
+		return "SHUTDOWN"
+	case 8:
+		return "SHUTDOWN_ACK"
+	case 9:
+		return "ERROR"
+	case 10:
+		return "COOKIE_ECHO"
+	case 11:
+		return "COOKIE_ACK"
+	case 14:
+		return "SHUTDOWN_COMPLETE"
+	}
+	return fmt.Sprintf("chunk type %d", t)
 }
 
 // FieldValues implements dfilter.Target. Lookups are case-insensitive on the

@@ -16,6 +16,7 @@ package livesource
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net/netip"
 	"sort"
@@ -32,6 +33,7 @@ import (
 	"BeeEye/internal/geoip"
 	"BeeEye/internal/identity"
 	"BeeEye/internal/live"
+	"BeeEye/internal/livefile"
 	"BeeEye/internal/model"
 	"BeeEye/internal/protocol"
 	"BeeEye/internal/store"
@@ -57,6 +59,14 @@ type Pipeline struct {
 	// on the hot path checks it, so an atomic pointer avoids taking a lock
 	// per packet just to find out no session is running.
 	tcap atomic.Pointer[tcapture.Manager]
+	// byteSampler feeds the overview's GPU-rendered traffic-trend curve
+	// (api.Server.AddTrafficBytes, via SetByteSampler) — nil until wired in,
+	// same atomic-pointer-on-the-hot-path treatment as tcap above. Called
+	// from ingest (post-dissection, not run's raw packet-receive case) since
+	// it needs the same tx/rx direction classification c.TxBytes/RxBytes
+	// below already computes — direction is not knowable from the raw bytes
+	// alone.
+	byteSampler atomic.Pointer[func(tx, rx int64)]
 
 	live  bool // true = real capture, false = simulator (F43)
 	iface string
@@ -93,6 +103,38 @@ func Open(st *store.Store, iface string, cfg *config.Detection, intel detect.Thr
 	if err != nil {
 		return nil, err
 	}
+	p := newPipeline(st, src, real, cfg, intel)
+	go p.run()
+	return p, nil
+}
+
+// ImportFile replays a previously-captured pcap/pcapng file through the same
+// aggregation a live capture gets, writing devices/connections/DNS records
+// into st. It exists so importing a historical capture (from the analyzer's
+// "open file" feature, F-offline-analysis) makes the overview reflect that
+// capture too, rather than only ever showing the live database — before this,
+// the two could disagree about what "the data" even was.
+//
+// Unlike Open, the returned Pipeline drains to completion on its own (the
+// packet channel closes at EOF, same as Session.OpenFile's replay) rather
+// than running indefinitely; callers do not need to Close it, though doing so
+// mid-replay is harmless. Call Wait to block until the import has finished
+// writing to st.
+func ImportFile(st *store.Store, r io.Reader, name string, cfg *config.Detection, intel detect.ThreatIntel) (*Pipeline, error) {
+	rc, ok := r.(io.ReadCloser)
+	if !ok {
+		rc = io.NopCloser(r)
+	}
+	src, err := livefile.Open(rc, name)
+	if err != nil {
+		return nil, err
+	}
+	p := newPipeline(st, src, true, cfg, intel)
+	go p.run()
+	return p, nil
+}
+
+func newPipeline(st *store.Store, src live.Source, real bool, cfg *config.Detection, intel detect.ThreatIntel) *Pipeline {
 	p := &Pipeline{
 		st:         st,
 		src:        src,
@@ -107,9 +149,13 @@ func Open(st *store.Store, iface string, cfg *config.Detection, intel detect.Thr
 	}
 	p.eng = &detect.Engine{Cfg: cfg, Cats: p.cats}
 	p.intel.Store(&intel)
-	go p.run()
-	return p, nil
+	return p
 }
+
+// Wait blocks until the pipeline's run loop has exited — for a live capture
+// that means after Close, for an ImportFile replay it means the file has been
+// fully read and its final flush written to the store.
+func (p *Pipeline) Wait() { <-p.done }
 
 // Live reports whether the capture is real (true) or the simulator (false).
 func (p *Pipeline) Live() bool    { return p.live }
@@ -130,6 +176,13 @@ func (p *Pipeline) SetIntel(intel detect.ThreatIntel) { p.intel.Store(&intel) }
 // packet's MAC), so a targeted session sees the same live packets the
 // dissector does — not a replay of whatever the ring buffer retained.
 func (p *Pipeline) SetTargetedCapture(mgr *tcapture.Manager) { p.tcap.Store(mgr) }
+
+// SetByteSampler wires in the callback fed each dissected packet's on-wire
+// length, split into (tx, rx) by the same local-endpoint direction ingest
+// itself uses — exactly one of the two is non-zero per call, both zero for
+// routed traffic with no local endpoint. How the overview's traffic-trend
+// curve (F7) stays live without a second capture loop of its own.
+func (p *Pipeline) SetByteSampler(fn func(tx, rx int64)) { p.byteSampler.Store(&fn) }
 
 func (p *Pipeline) run() {
 	defer close(p.done)
@@ -171,6 +224,22 @@ func (p *Pipeline) ingest(r *dissect.Result) {
 	dstIP, dstErr := netip.ParseAddr(r.Dst)
 	srcOK := srcErr == nil
 	dstOK := dstErr == nil
+
+	// Feed the overview's traffic-trend curve (F7) here rather than on
+	// run()'s raw packet-receive case: direction (tx = this gateway
+	// sending, rx = receiving) is not knowable before dissection, and this
+	// is the same isLocal classification c.TxBytes/RxBytes uses below for
+	// the packets that go on to become a flow — done ahead of the
+	// non-flow-packet early return further down so ARP/ICMP/etc. still
+	// count toward the curve, same as every packet did before the split.
+	if sampler := p.byteSampler.Load(); sampler != nil {
+		switch {
+		case srcOK && isLocal(srcIP):
+			(*sampler)(int64(r.Length), 0)
+		case dstOK && isLocal(dstIP):
+			(*sampler)(0, int64(r.Length))
+		}
+	}
 
 	// Device discovery: a LAN device is the local endpoint of a frame. Both
 	// ends can be local (east-west), so consider each.
@@ -215,6 +284,18 @@ func (p *Pipeline) ingest(r *dissect.Result) {
 	}
 	c.Packets++
 	c.Bytes += int64(r.Length)
+	// This one frame's own direction, independent of which end holds the
+	// flow's canonical Src/Dst (see flowKey): local-as-source is this
+	// device sending, local-as-destination is it receiving. A frame with
+	// neither end local (routed traffic this gateway is not a party to)
+	// credits neither counter, which is honest — Bytes still carries the
+	// total, TxBytes+RxBytes just may not sum to it for that case.
+	switch {
+	case srcOK && isLocal(srcIP):
+		c.TxBytes += int64(r.Length)
+	case dstOK && isLocal(dstIP):
+		c.RxBytes += int64(r.Length)
+	}
 	if r.SNI != "" {
 		c.SNI = r.SNI
 	}
@@ -242,6 +323,7 @@ func (p *Pipeline) ingestDNS(r *dissect.Result, srcMAC, dstMAC string) {
 		TS:     r.TS,
 		Domain: names[0],
 		RCode:  rcodeName(first(r.FieldValues("dns.flags.rcode"))),
+		Iface:  r.Iface,
 	}
 	// The querier is the local device: on a query it is the source, on a
 	// response it is the destination.

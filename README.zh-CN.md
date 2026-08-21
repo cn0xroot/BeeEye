@@ -18,6 +18,12 @@ BeeEye 跑在已经承担家庭网络路由的 Ubuntu 主机上。它把 eBPF �
 |---|---|
 | ![分析器 浅色主题 中文](PIC/analyzer-light-zh.png) | ![分析器 深色主题 中文](PIC/analyzer-dark-zh.png) |
 
+**BeeEye-desktop** —— 同一个分析器的原生窗口版本（给运维工作站用的 Tauri 瘦壳，见 [PROGRESS.md §二点五](PROGRESS.md)），下面是三套内置主题的效果：
+
+| 米黄纸感 | Matrix（设置面板展开中） | 午夜霓虹 |
+|---|---|---|
+| ![桌面客户端 米黄主题](PIC/desktop-paper-beige.png) | ![桌面客户端 Matrix 主题 设置面板](PIC/desktop-matrix-settings.png) | ![桌面客户端 午夜霓虹主题](PIC/desktop-midnight-neon.png) |
+
 ---
 
 ## 两个 UI，两个进程

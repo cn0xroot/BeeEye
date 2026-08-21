@@ -56,7 +56,9 @@
     "byCategory": "按设备类别",
     "topTalkers": "流量排行",
     "protocolShare": "协议占比",
-    "geoDistribution": "目标国家/地区分布"
+    "geoDistribution": "目标国家/地区分布",
+    "outgoing": "上行",
+    "incoming": "下行"
   },
   "filters": {
     "title": "筛选",
@@ -110,7 +112,20 @@
     "time": "时间",
     "bytes": "字节",
     "noData": "该时间范围内无数据",
-    "other": "其他"
+    "other": "其他",
+    "now": "现在"
+  },
+  "iface": {
+    "title": "网卡 — {{name}}",
+    "ip": "IP 地址",
+    "mac": "MAC 地址",
+    "down": "下载",
+    "up": "上传",
+    "totalDown": "总下载",
+    "totalUp": "总上传",
+    "ssid": "SSID",
+    "channel": "信道",
+    "signal": "信号"
   },
   "analysis": {
     "title": "抓包分析",
@@ -272,7 +287,12 @@
     "title": "世界地图 · 通信目的地",
     "destinations": "{{count}} 个目的地",
     "anchorNote": "起点为示意锚点 —— 网关没有真实地理坐标",
-    "noWebgl": "此浏览器不支持 WebGL2"
+    "noWebgl": "此浏览器不支持 WebGL2",
+    "importedFiles": "已导入的抓包",
+    "scopeLive": "实时",
+    "scopeClear": "返回实时",
+    "tooltipSrc": "来源",
+    "tooltipDst": "目标"
   },
   "geoAcc": {
     "city": "● 精确（省市+运营商）",

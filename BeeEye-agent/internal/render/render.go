@@ -75,6 +75,25 @@ type Renderer interface {
 	// Render writes width*height*4 RGBA bytes into out. channelRGB carries
 	// one RGB triplet per channel; see ChannelRGB.
 	Render(intensity, channelRGB []float32, channels, width, height int, timeS float32, out []byte) error
+	// RenderCurve draws a mirrored two-series line-chart frame: txValues
+	// filled upward from a centre baseline, rxValues filled downward from
+	// the same baseline, one already-normalized [0,1] sample per pixel
+	// column each — upload/download over time the way a bandwidth monitor
+	// shows it, as opposed to Render's per-channel colour field. Same
+	// reasoning for having a GPU path at all: a wide curve redrawn several
+	// times a second is exactly the kind of per-pixel work a GPU does far
+	// more cheaply than a Go loop.
+	//
+	// The boundary and its glow are computed from the line SEGMENT joining
+	// each pair of adjacent columns (point-to-segment distance), not just
+	// the current column's own height — a flat per-column distance is what
+	// made an earlier version of this read as a stepped bar chart with blur
+	// around each step rather than one continuous anti-aliased line; a
+	// diagonal run between two differing samples needs a diagonal glow.
+	// hotRGB is a shared bloom colour both series ride toward on a burst,
+	// baseRGB is the ground/panel colour a fill fades to as it nears the
+	// baseline and the flat colour outside both filled regions.
+	RenderCurve(txValues, rxValues []float32, width, height int, timeS float32, txRGB, rxRGB, hotRGB, baseRGB [3]float32, out []byte) error
 	Close() error
 }
 
@@ -145,6 +164,19 @@ func (h *History) Rotate() {
 	if h.peak < 1 {
 		h.peak = 1
 	}
+}
+
+// RawSnapshot returns the accumulated per-bucket values as-is — real bytes,
+// not the log1p-normalized [0,1] Snapshot gives a Renderer. For a client-side
+// chart that wants to print an actual "40 KB" axis label rather than draw a
+// picture, the normalized version has already thrown away the number a label
+// needs.
+func (h *History) RawSnapshot() []float32 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]float32, len(h.data))
+	copy(out, h.data)
+	return out
 }
 
 // Snapshot returns normalized intensities in [0,1], ready for a renderer.

@@ -56,7 +56,9 @@
     "byCategory": "By device category",
     "topTalkers": "Top talkers",
     "protocolShare": "Protocol share",
-    "geoDistribution": "Destinations by country"
+    "geoDistribution": "Destinations by country",
+    "outgoing": "Outgoing",
+    "incoming": "Incoming"
   },
   "filters": {
     "title": "Filters",
@@ -110,7 +112,20 @@
     "time": "Time",
     "bytes": "Bytes",
     "noData": "No data in this range",
-    "other": "Other"
+    "other": "Other",
+    "now": "now"
+  },
+  "iface": {
+    "title": "Interface — {{name}}",
+    "ip": "IP",
+    "mac": "MAC",
+    "down": "Down",
+    "up": "Up",
+    "totalDown": "Total ↓",
+    "totalUp": "Total ↑",
+    "ssid": "SSID",
+    "channel": "Channel",
+    "signal": "Signal"
   },
   "analysis": {
     "title": "Capture analysis",
@@ -272,7 +287,12 @@
     "title": "World map · destinations",
     "destinations": "{{count}} destinations",
     "anchorNote": "Origin is a schematic anchor — the gateway has no real geolocation",
-    "noWebgl": "WebGL2 is unavailable in this browser"
+    "noWebgl": "WebGL2 is unavailable in this browser",
+    "importedFiles": "Imported captures",
+    "scopeLive": "Live",
+    "scopeClear": "Back to live",
+    "tooltipSrc": "Source",
+    "tooltipDst": "Destination"
   },
   "geoAcc": {
     "city": "● precise (city + operator)",

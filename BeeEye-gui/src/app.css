@@ -70,6 +70,38 @@ select:focus, .filter-input:focus {
 .filter-input.valid { border-color: rgba(12, 163, 12, 0.55); }
 .filter-input.invalid { border-color: rgba(208, 59, 59, 0.75); }
 
+.quick-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.quick-filter-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.quick-filter-label {
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.quick-filter-field input {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--text);
+  outline: none;
+  font-size: 12px;
+  width: 130px;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.quick-filter-field input:focus {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px rgba(34, 190, 220, 0.12);
+}
+
 .checkbox { display: flex; align-items: center; gap: 6px; color: var(--text-dim); cursor: pointer; }
 .checkbox.small { font-size: 11px; }
 .checkbox input { accent-color: var(--accent); }
@@ -100,6 +132,23 @@ select:focus, .filter-input:focus {
 .btn-stop {
   background: linear-gradient(180deg, rgba(208, 59, 59, 0.35), rgba(208, 59, 59, 0.18));
   border-color: rgba(208, 59, 59, 0.5);
+}
+
+.offline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #1a1206;
+  background: var(--accent);
+  white-space: nowrap;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .lang-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
@@ -179,6 +228,15 @@ select:focus, .filter-input:focus {
 .empty { padding: 28px 16px; text-align: center; color: var(--text-faint); }
 .empty-title { color: var(--text-dim); margin-bottom: 4px; }
 .empty-help { font-size: 12px; }
+
+.pt-explain { text-align: left; padding: 16px 18px; }
+.pt-explain .empty-title { font-weight: 600; }
+.pt-explain-lang { margin: 8px 0; font-size: 12.5px; line-height: 1.5; color: var(--text-dim); }
+.pt-explain-tag {
+  display: inline-block; min-width: 20px; margin-right: 8px; padding: 0 4px;
+  border-radius: 4px; font-size: 10px; font-weight: 700; text-align: center;
+  background: var(--accent-dim, var(--border)); color: var(--accent, var(--text));
+}
 
 /* --------------------------------------------------------------- traffic field */
 

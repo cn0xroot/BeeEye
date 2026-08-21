@@ -55,6 +55,66 @@ func TestCPURenderProducesAColourfulField(t *testing.T) {
 	}
 }
 
+func testCurveValues(width int) []float32 {
+	rng := rand.New(rand.NewSource(11))
+	out := make([]float32, width)
+	for x := 0; x < width; x++ {
+		v := float32(rng.Float64()) * 0.2
+		if x > width/2 && x < width/2+10 {
+			v = 0.9 // a spike, to exercise the stroke and fill at a real height
+		}
+		out[x] = clamp01(v)
+	}
+	return out
+}
+
+func TestCPURenderCurveDrawsGroundStrokeAndFill(t *testing.T) {
+	const w, h = 256, 128
+	const half = h / 2
+	tx := testCurveValues(w)
+	rx := make([]float32, w) // idle rx: baseline flat, isolates the tx half for this check
+	out := make([]byte, w*h*4)
+	txRGB := [3]float32{0.3, 0.6, 1}
+	rxRGB := [3]float32{1, 0.5, 0.2}
+	hot := [3]float32{1, 1, 1}
+	base := [3]float32{0.02, 0.05, 0.1}
+	if err := NewCPURenderer().RenderCurve(tx, rx, w, h, 0, txRGB, rxRGB, hot, base, out); err != nil {
+		t.Fatalf("RenderCurve: %v", err)
+	}
+
+	for i := 3; i < len(out); i += 4 {
+		if out[i] != 255 {
+			t.Fatalf("pixel %d is not opaque", i/4)
+		}
+	}
+
+	// At the spike column (tx half, rows 0..half-1), the pixel just above the
+	// curve height should be ground (dark) and the pixel just below should
+	// be the fill (brighter, tinted toward the fill colour) — otherwise the
+	// "area under the curve" is not actually being drawn.
+	x := w/2 + 5
+	var spikeHeight float32 = 0.9
+	curveY := int(float32(half) * (1 - spikeHeight))
+	above := (max(curveY-4, 0)*w + x) * 4
+	below := (min(curveY+4, half-1)*w + x) * 4
+	aboveBrightness := int(out[above]) + int(out[above+1]) + int(out[above+2])
+	belowBrightness := int(out[below]) + int(out[below+1]) + int(out[below+2])
+	if belowBrightness <= aboveBrightness {
+		t.Errorf("fill (brightness %d) is not brighter than ground (brightness %d) below the curve", belowBrightness, aboveBrightness)
+	}
+}
+
+func TestRenderCurveRejectsBadGeometry(t *testing.T) {
+	r := NewCPURenderer()
+	line := [3]float32{1, 1, 1}
+	if err := r.RenderCurve(make([]float32, 4), make([]float32, 4), 256, 128, 0, line, line, line, line, make([]byte, 10)); err == nil {
+		t.Error("accepted an undersized output buffer")
+	}
+	if err := r.RenderCurve(make([]float32, 4), make([]float32, 4), 256, 128, 0, line, line, line, line, make([]byte, 256*128*4)); err == nil {
+		t.Error("accepted an undersized values buffer")
+	}
+}
+
 func TestRenderRejectsBadGeometry(t *testing.T) {
 	r := NewCPURenderer()
 	out := make([]byte, 10)
@@ -149,6 +209,51 @@ func TestBackendsAgree(t *testing.T) {
 
 	// Float maths differs slightly between the two; a couple of levels of
 	// tolerance per channel is expected, a visible difference is not.
+	var worst, total float64
+	for i := range gpuOut {
+		d := math.Abs(float64(gpuOut[i]) - float64(cpuOut[i]))
+		total += d
+		if d > worst {
+			worst = d
+		}
+	}
+	mean := total / float64(len(gpuOut))
+	if worst > 3 {
+		t.Errorf("worst per-channel difference %v (mean %.4f) — the kernels have diverged", worst, mean)
+	}
+	t.Logf("cuda device %q, worst channel delta %v, mean %.5f", gpu.Device(), worst, mean)
+}
+
+// TestCurveBackendsAgree is TestBackendsAgree's counterpart for RenderCurve —
+// same skip-unless-cuda guard, same job of catching the kernel and the Go
+// fallback drifting apart.
+func TestCurveBackendsAgree(t *testing.T) {
+	gpu := NewRenderer()
+	if gpu.Name() != "cuda" {
+		t.Skip("not built with -tags cuda, or no CUDA device present")
+	}
+	defer gpu.Close()
+
+	const w, h = 256, 128
+	tx := testCurveValues(w)
+	rx := make([]float32, w) // a distinct series, not just tx again, so both halves get real coverage
+	for i, v := range tx {
+		rx[w-1-i] = v
+	}
+	txRGB := [3]float32{0.3, 0.6, 1}
+	rxRGB := [3]float32{1, 0.5, 0.2}
+	hot := [3]float32{1.0, 0.976, 0.929}
+	base := [3]float32{0.02, 0.05, 0.1}
+	gpuOut := make([]byte, w*h*4)
+	cpuOut := make([]byte, w*h*4)
+
+	if err := gpu.RenderCurve(tx, rx, w, h, 1.5, txRGB, rxRGB, hot, base, gpuOut); err != nil {
+		t.Fatalf("cuda render: %v", err)
+	}
+	if err := NewCPURenderer().RenderCurve(tx, rx, w, h, 1.5, txRGB, rxRGB, hot, base, cpuOut); err != nil {
+		t.Fatalf("cpu render: %v", err)
+	}
+
 	var worst, total float64
 	for i := range gpuOut {
 		d := math.Abs(float64(gpuOut[i]) - float64(cpuOut[i]))

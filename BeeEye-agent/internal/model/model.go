@@ -64,11 +64,20 @@ type Connection struct {
 	AppProtocol string    `json:"app_protocol"` // application layer (F23)
 	Service     string    `json:"service"`      // port→service name (F24)
 	Bytes       int64     `json:"bytes"`
-	Packets     int64     `json:"packets"`
-	Iface       string    `json:"iface"`    // source interface (F17)
-	SNI         string    `json:"sni"`      // TLS ClientHello SNI (F3)
-	JA3         string    `json:"ja3"`      // JA3 fingerprint (F3)
-	Internal    bool      `json:"internal"` // dst is internal (east-west, F34)
+	// TxBytes/RxBytes split Bytes by direction, from the local device's own
+	// point of view: Tx is frames where the local IP was the source (data
+	// going out), Rx is frames where it was the destination (data coming
+	// in). Neither SrcIP/DstIP alone can answer "which way" for a flow's
+	// running total, since both directions of one conversation share a
+	// single Connection row (see flowKey's canonical ordering) — a reply
+	// from the far end carries the same SrcIP/DstIP pair, just swapped.
+	TxBytes  int64  `json:"tx_bytes"`
+	RxBytes  int64  `json:"rx_bytes"`
+	Packets  int64  `json:"packets"`
+	Iface    string `json:"iface"`    // source interface (F17)
+	SNI      string `json:"sni"`      // TLS ClientHello SNI (F3)
+	JA3      string `json:"ja3"`      // JA3 fingerprint (F3)
+	Internal bool   `json:"internal"` // dst is internal (east-west, F34)
 }
 
 // DNSRecord captures a resolved query (program.md §3.4.6, F21).
@@ -81,6 +90,7 @@ type DNSRecord struct {
 	TTL         int       `json:"ttl"`
 	RCode       string    `json:"rcode"`     // NOERROR / NXDOMAIN — feeds DNS anomaly (F33)
 	Encrypted   bool      `json:"encrypted"` // DoH/DoT: content not visible (F21 note)
+	Iface       string    `json:"iface"`     // source interface name, or an imported file's name (F17)
 }
 
 // Severity for events / alerts.

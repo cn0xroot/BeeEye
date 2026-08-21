@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../api'
+import { combine } from '../filterPresets'
 import PresetMenu from './PresetMenu'
 import Settings from './Settings'
 
@@ -27,6 +28,20 @@ function MoonIcon() {
   )
 }
 
+// QUICK_FIELDS are shortcuts for the dimensions people look for a packet by
+// most (source, destination, protocol, process) — each builds one clause of
+// the same display-filter expression the free-text box takes, via `combine`,
+// so this is a faster way to type a filter, not a second query language.
+const QUICK_FIELDS = [
+  { key: 'src', labelKey: 'toolbar.quickSrc', placeholderKey: 'toolbar.quickSrcPlaceholder', build: (v) => `ip.src contains "${v}"` },
+  { key: 'dst', labelKey: 'toolbar.quickDst', placeholderKey: 'toolbar.quickDstPlaceholder', build: (v) => `ip.dst contains "${v}"` },
+  // A protocol name is a bare presence test (matches the preset menu's own
+  // style), not a contains clause — "tls" is a discrete keyword, not text to
+  // search for a substring of.
+  { key: 'proto', labelKey: 'toolbar.quickProto', placeholderKey: 'toolbar.quickProtoPlaceholder', build: (v) => v },
+  { key: 'process', labelKey: 'toolbar.quickProcess', placeholderKey: 'toolbar.quickProcessPlaceholder', build: (v) => `process.comm contains "${v}"` },
+]
+
 // Toolbar owns capture control and the display filter.
 //
 // The filter box validates as you type against the server's own parser rather
@@ -40,11 +55,16 @@ export default function Toolbar({ status, interfaces, onStarted, onStopped, onFi
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const debounce = useRef(null)
+  const fileInputRef = useRef(null)
+  const [quick, setQuick] = useState({ src: '', dst: '', proto: '', process: '' })
 
   // Default to whatever the server is capturing on, else the first live NIC.
+  // While offline (replaying a file), status.iface holds the filename, not
+  // an interface — must not leak into this picker's value, or "Start" after
+  // closing the file would try to open a NIC named "capture.pcap".
   useEffect(() => {
     if (iface) return
-    if (status?.iface) setIface(status.iface)
+    if (status?.iface && !status?.offline) setIface(status.iface)
     else if (interfaces.length) {
       // "any" is the right default on a gateway: the interesting traffic is
       // rarely all on one NIC, and each packet still records where it came in.
@@ -52,7 +72,7 @@ export default function Toolbar({ status, interfaces, onStarted, onStopped, onFi
         interfaces.find((i) => i.up && i.name !== 'lo') || interfaces[0]
       setIface(pick.name)
     }
-  }, [status?.iface, interfaces, iface])
+  }, [status?.iface, status?.offline, interfaces, iface])
 
   useEffect(() => {
     if (debounce.current) clearTimeout(debounce.current)
@@ -95,6 +115,30 @@ export default function Toolbar({ status, interfaces, onStarted, onStopped, onFi
     }
   }
 
+  // Opening a file goes through the exact same onStarted callback a live
+  // capture does — the server replays it through the identical pipeline
+  // (Session.OpenFile), so "new packets showed up" is the same event either
+  // way, just with status.offline now true.
+  const openFile = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // so picking the same file twice still fires onChange
+    if (!file) return
+    setBusy(true)
+    setError(null)
+    try {
+      onStarted(await api.openFile(file))
+      // Best-effort: also fold this file into the overview app's own store
+      // (see api.importToOverview) so it reflects the import too, not just
+      // the analyzer. Never awaited and never surfaced as an error here —
+      // the analyzer's own import above is what this button promises.
+      api.importToOverview(file)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const applyFilter = async (e) => {
     e?.preventDefault()
     try {
@@ -104,6 +148,24 @@ export default function Toolbar({ status, interfaces, onStarted, onStopped, onFi
     } catch (err) {
       setFilterError(err.message)
     }
+  }
+
+  // A quick-filter field ANDs its clause onto whatever is already in the box
+  // and applies immediately — the same "picking it does the thing" contract
+  // PresetMenu already established, just parameterised by typed text instead
+  // of a fixed template.
+  const applyQuick = async (field) => {
+    const v = quick[field.key].trim()
+    if (!v) return
+    const expr = combine(filter, field.build(v))
+    setFilter(expr)
+    try {
+      onFilterApplied(await api.setFilter(expr))
+      setFilterError(null)
+    } catch (err) {
+      setFilterError(err.message)
+    }
+    setQuick((q) => ({ ...q, [field.key]: '' }))
   }
 
   const running = status?.running
@@ -122,6 +184,17 @@ export default function Toolbar({ status, interfaces, onStarted, onStopped, onFi
         <label className="field">
           <span className="field-label">{t('toolbar.interface')}</span>
           <select value={iface} onChange={(e) => setIface(e.target.value)} disabled={running}>
+            {/* status.iface can set `iface` before the /api/interfaces fetch
+                above it resolves (e.g. the analyzer was already capturing
+                when this page loaded) — without a matching <option> yet, a
+                native <select> renders blank instead of the name, which
+                reads as "my interface got cleared" until the real list
+                arrives a moment later. This placeholder keeps the name
+                visible the whole time; it is replaced once the fetch
+                completes and interfaces actually contains it. */}
+            {iface && !interfaces.some((i) => i.name === iface) && (
+              <option value={iface}>{iface}</option>
+            )}
             {interfaces.map((i) => (
               <option key={i.name} value={i.name} disabled={!i.up}>
                 {i.name}
@@ -156,6 +229,28 @@ export default function Toolbar({ status, interfaces, onStarted, onStopped, onFi
         <a className="btn btn-ghost" href={api.pcapURL()} download>
           {t('toolbar.exportPcap')}
         </a>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pcap"
+          onChange={openFile}
+          style={{ display: 'none' }}
+        />
+        <button
+          className="btn btn-ghost"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={busy}
+          title={t('toolbar.openFileHint')}
+        >
+          {t('toolbar.openFile')}
+        </button>
+
+        {status?.offline && (
+          <span className="offline-badge" title={t('toolbar.offlineHint', { name: status.iface })}>
+            {t('toolbar.offlineBadge', { name: status.iface })}
+          </span>
+        )}
 
         <div className="spacer" />
 
@@ -233,6 +328,36 @@ export default function Toolbar({ status, interfaces, onStarted, onStopped, onFi
           {t('toolbar.clear')}
         </button>
       </form>
+
+      {/* Dedicated fields for the dimensions people actually search a packet
+          list by, instead of requiring the filter grammar to locate one —
+          each just builds and ANDs in one clause (see applyQuick). */}
+      <div className="quick-filter-row">
+        <span className="field-label">{t('toolbar.quickFilter')}</span>
+        {QUICK_FIELDS.map((field) => (
+          <label key={field.key} className="quick-filter-field">
+            <span className="quick-filter-label">{t(field.labelKey)}</span>
+            <input
+              value={quick[field.key]}
+              onChange={(e) => setQuick((q) => ({ ...q, [field.key]: e.target.value }))}
+              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), applyQuick(field))}
+              placeholder={t(field.placeholderKey)}
+              spellCheck="false"
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              className="btn btn-ghost tiny"
+              onClick={() => applyQuick(field)}
+              disabled={!quick[field.key].trim()}
+              title={t('toolbar.quickAdd')}
+              aria-label={t('toolbar.quickAdd')}
+            >
+              +
+            </button>
+          </label>
+        ))}
+      </div>
 
       {filterError && (
         <div className="inline-error" role="alert">

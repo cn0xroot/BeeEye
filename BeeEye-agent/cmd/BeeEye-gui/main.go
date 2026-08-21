@@ -26,7 +26,8 @@ import (
 func main() {
 	addr := flag.String("listen", ":8081", "address to listen on")
 	webDir := flag.String("web", "./BeeEye-gui/dist", "directory holding the built analyzer UI")
-	iface := flag.String("iface", "", "interface to start capturing on immediately (default: none)")
+	iface := flag.String("iface", "", "interface to preselect in the UI (default: none — the UI picks a sensible default on its own)")
+	autostart := flag.Bool("autostart", false, "start capturing on -iface immediately at launch, instead of waiting for the UI's Start button")
 	filter := flag.String("filter", "", "initial display filter")
 	promisc := flag.Bool("promisc", true, "put the interface into promiscuous mode")
 	ring := flag.Int("ring", gui.DefaultRingSize, "how many dissected packets to retain in memory")
@@ -56,7 +57,7 @@ func main() {
 		sess.EnablePersistence(*captureDir, int64(*captureMaxMB)<<20)
 	}
 
-	if *iface != "" {
+	if *iface != "" && *autostart {
 		opt := gui.StartOptions{Iface: *iface, Promisc: *promisc,
 			SnapLen: live.DefaultSnapLen, Filter: *filter}
 		if err := sess.Start(opt); err != nil {
@@ -72,7 +73,14 @@ func main() {
 			log.Printf("falling back to the SIMULATED source — these packets are not real traffic")
 		}
 	} else {
-		log.Printf("idle; pick an interface in the UI or pass -iface to start capturing")
+		// Idle by default (even with -iface set): opening the analyzer used
+		// to start capturing traffic before anyone asked it to, which is a
+		// surprising thing for an app to do on launch — the UI already picks
+		// -iface's interface as its own default selection (see Toolbar.jsx),
+		// so nothing is lost by waiting for an explicit Start click except
+		// the surprise. Pass -autostart for the old immediate-capture
+		// behaviour (e.g. a scripted/headless deployment with no one at the UI).
+		log.Printf("idle; press Start in the UI to begin capturing")
 	}
 
 	srv := &http.Server{

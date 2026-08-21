@@ -17,7 +17,21 @@
     "autoscroll": "自动滚动",
     "autoscrollOn": "自动滚动:开",
     "autoscrollOff": "自动滚动:关",
-    "autoscrollHeld": "暂停期间缓冲了 {{count}} 个新包 —— 恢复以查看"
+    "autoscrollHeld": "暂停期间缓冲了 {{count}} 个新包 —— 恢复以查看",
+    "quickFilter": "快速定位",
+    "quickAdd": "添加到过滤器",
+    "quickSrc": "源 IP",
+    "quickSrcPlaceholder": "192.168.1.100",
+    "quickDst": "目标 IP",
+    "quickDstPlaceholder": "8.8.8.8",
+    "quickProto": "协议",
+    "quickProtoPlaceholder": "tls / dns / http",
+    "quickProcess": "进程",
+    "quickProcessPlaceholder": "curl",
+    "openFile": "打开文件",
+    "openFileHint": "打开一个 .pcap 文件进行离线分析，就像 Wireshark 的“打开”",
+    "offlineBadge": "回放中：{{name}}",
+    "offlineHint": "当前显示的是历史文件 {{name}} 的内容，不是实时流量。点击“开始”返回实时抓包。"
   },
   "status": {
     "captured": "已捕获",

@@ -4,6 +4,7 @@ BeeEye-agent/bpf/*.o
 BeeEye-agent/internal/ebpf/*.o
 BeeEye-agent/internal/tlspeek/*.o
 BeeEye-agent/cuda/*.so
+*.deb
 
 # Generated from the running kernel's BTF — regenerate with `make vmlinux`
 BeeEye-agent/bpf/vmlinux.h

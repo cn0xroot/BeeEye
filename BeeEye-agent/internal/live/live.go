@@ -23,12 +23,20 @@ import (
 // Packet is one captured frame handed to the dissector. Data holds the raw
 // bytes as they came off the wire, truncated to the snaplen.
 type Packet struct {
-	Index   int64     // 1-based capture ordinal
-	TS      time.Time // capture timestamp
-	Iface   string    // source interface name (F17)
-	Data    []byte    // raw frame bytes (link layer first)
-	CapLen  int       // bytes actually captured
-	OrigLen int       // bytes on the wire before truncation
+	Index int64     // 1-based capture ordinal
+	TS    time.Time // capture timestamp
+	Iface string    // source interface name (F17)
+	Data  []byte    // raw frame bytes (link layer first)
+	// LinkType is a pcapfile.LinkEthernet/LinkRaw/LinkLinuxSLL/… value (see
+	// that package's const block). Left at its zero value by every live
+	// capture source (AF_PACKET, eBPF) — a physical or wireless NIC is
+	// always genuine Ethernet framing, so there is nothing for them to set —
+	// and dissect.Packet treats zero the same as LinkEthernet accordingly.
+	// Only livefile (replaying a capture file, which can carry any LINKTYPE_
+	// the tool that wrote it used) ever sets this to something else.
+	LinkType uint32
+	CapLen   int // bytes actually captured
+	OrigLen  int // bytes on the wire before truncation
 }
 
 // Source is a running capture. Packets() is closed when the source stops.

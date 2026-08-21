@@ -129,6 +129,33 @@ function buildGraticule() {
   return new Float32Array(v)
 }
 
+// buildLandSegments turns a GeoJSON FeatureCollection's polygon rings into
+// GL_LINES-ready [lat,lon, lat,lon, …] segment pairs — the exact shape
+// buildGraticule already produces, so coastlines draw through the identical
+// grid shader with no new machinery. Coordinates come from world.geo.json
+// (public/), a low-resolution country-boundary set fetched once and never
+// re-requested: it does not change while the tab is open.
+function buildLandSegments(geojson) {
+  const out = []
+  const addRing = (ring) => {
+    for (let i = 0; i < ring.length; i++) {
+      const [lon0, lat0] = ring[i]
+      const [lon1, lat1] = ring[(i + 1) % ring.length]
+      out.push(lat0, lon0, lat1, lon1)
+    }
+  }
+  for (const f of geojson.features || []) {
+    const g = f.geometry
+    if (!g) continue
+    if (g.type === 'Polygon') {
+      for (const ring of g.coordinates) addRing(ring)
+    } else if (g.type === 'MultiPolygon') {
+      for (const poly of g.coordinates) for (const ring of poly) addRing(ring)
+    }
+  }
+  return new Float32Array(out)
+}
+
 // arc2d builds a curved poly-line from a→b in lat/lon, bowed toward the pole
 // for a great-circle feel, with a t in [0,1] per vertex.
 function arc2d(aLat, aLon, bLat, bLon, steps = 40) {
@@ -151,15 +178,49 @@ function startCanvas2D(canvas, stateRef) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return () => {}
   let raf = 0
-  const t0 = performance.now()
   const W = () => canvas.width, H = () => canvas.height
   const px = (lat, lon) => [((lon + 180) / 360) * W(), ((90 - lat) / 180) * H()]
 
+  // draw is one animation frame; drawFrame is where the actual per-frame
+  // guards live (0-sized canvas, degenerate arcs, non-finite point coords —
+  // see their own comments). draw wraps it in try/catch as a second line of
+  // defense: this loop reschedules itself only from its OWN tail, so any
+  // uncaught throw — the specific ones already guarded against, or a case
+  // nobody has hit yet — would otherwise silently end the animation forever,
+  // leaving whatever was last drawn on screen (a "black screen" bug report
+  // traced to exactly that: one bad frame, then nothing, ever again).
   const draw = () => {
+    try {
+      drawFrame()
+    } catch (e) {
+      console.error('WorldMap: canvas2d frame failed, skipping it', e)
+    }
+    raf = requestAnimationFrame(draw)
+  }
+
+  const drawFrame = () => {
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
     const w = canvas.clientWidth * dpr, h = canvas.clientHeight * dpr
+    // Before the card has been laid out (first paint, or briefly after an
+    // aspect-ratio-driven resize) clientWidth/clientHeight can read 0 — a
+    // 0-sized canvas.width/height turns every later coordinate into a
+    // divide-by-zero, and createRadialGradient throws on a non-finite value
+    // rather than silently drawing nothing. Skipping the frame (not resizing
+    // to 0, not drawing) rather than resizing to a 0×0 buffer is what keeps
+    // the picture correct once layout does settle.
+    if (w <= 0 || h <= 0) {
+      return
+    }
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h }
-    const now = (performance.now() - t0) / 1000
+    // Same raw epoch (performance.now()/1000, not mount-relative) as a.born
+    // below — an arc's age must be measured from that one shared clock,
+    // never one offset by however long this render loop had been mounted
+    // before the arc was born, or "now - a.born" comes out permanently
+    // negative (a fresh mount always starts after any earlier a.born was
+    // stamped) and every pulse freezes at its arc's start point forever (an
+    // arc's age also never crosses the 2.2s cutoff, so it never expires —
+    // "光点不跳动了").
+    const now = performance.now() / 1000
     const st = stateRef.current
     const css = getComputedStyle(document.documentElement)
     const bg = css.getPropertyValue('--bg').trim() || '#0a0e18'
@@ -176,14 +237,30 @@ function startCanvas2D(canvas, stateRef) {
     for (let lon = -150; lon <= 150; lon += 30) { const [x] = px(0, lon); ctx.moveTo(x, 0); ctx.lineTo(x, H()) }
     ctx.stroke(); ctx.globalAlpha = 1
 
+    // Land outline — drawn over the graticule (more opaque) so the
+    // coastlines read as the map's actual subject, not just another grid
+    // line. st.land arrives asynchronously (see the land-data effect below);
+    // until it does, the grid alone still reads as a map, just a plainer one.
+    if (st.land) {
+      ctx.strokeStyle = axis; ctx.globalAlpha = 0.6; ctx.lineWidth = 1
+      ctx.beginPath()
+      for (let i = 0; i < st.land.length; i += 4) {
+        const [x0, y0] = px(st.land[i], st.land[i + 1])
+        const [x1, y1] = px(st.land[i + 2], st.land[i + 3])
+        ctx.moveTo(x0, y0); ctx.lineTo(x1, y1)
+      }
+      ctx.stroke(); ctx.globalAlpha = 1
+    }
+
     // Arcs.
     ctx.globalCompositeOperation = 'lighter'
     st.arcs = st.arcs.filter((a) => now - a.born < 2.2)
     for (const a of st.arcs) {
+      const n = a.data.length / 3
+      if (n <= 0) continue // a degenerate (empty) arc has no head point to pulse
       const head = ((now - a.born) / 2.2)
       ctx.strokeStyle = accent; ctx.lineWidth = 1.4
       ctx.beginPath()
-      const n = a.data.length / 3
       for (let k = 0; k < n; k++) {
         const lat = a.data[k * 3], lon = a.data[k * 3 + 1]
         const [x, y] = px(lat, lon)
@@ -191,7 +268,7 @@ function startCanvas2D(canvas, stateRef) {
       }
       ctx.globalAlpha = 0.35; ctx.stroke()
       // Travelling pulse.
-      const hi = Math.min(n - 1, Math.floor(head * (n - 1)))
+      const hi = Math.max(0, Math.min(n - 1, Math.floor(head * (n - 1))))
       const [hx, hy] = px(a.data[hi * 3], a.data[hi * 3 + 1])
       const g = ctx.createRadialGradient(hx, hy, 0, hx, hy, 8 * dpr)
       g.addColorStop(0, accent); g.addColorStop(1, 'transparent')
@@ -204,6 +281,7 @@ function startCanvas2D(canvas, stateRef) {
     for (const p of st.points.values()) {
       const [x, y] = px(p.lat, p.lon)
       const r = (6 + p.mag * 16) * dpr
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(r) || r <= 0) continue
       const col = `rgb(${(p.col[0] * 255) | 0},${(p.col[1] * 255) | 0},${(p.col[2] * 255) | 0})`
       const g = ctx.createRadialGradient(x, y, 0, x, y, r)
       g.addColorStop(0, col); g.addColorStop(0.4, col); g.addColorStop(1, 'transparent')
@@ -212,7 +290,6 @@ function startCanvas2D(canvas, stateRef) {
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill()
     }
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'
-    raf = requestAnimationFrame(draw)
   }
   raf = requestAnimationFrame(draw)
   return () => cancelAnimationFrame(raf)
@@ -221,13 +298,38 @@ function startCanvas2D(canvas, stateRef) {
 // The gateway anchor: a schematic origin, not a real location.
 const ANCHOR = { lat: 34, lon: 108 }
 
-export default function WorldMap() {
+export default function WorldMap({ iface } = {}) {
   const { t } = useTranslation()
   const canvasRef = useRef(null)
   const glRef = useRef(null)
-  const stateRef = useRef({ points: new Map(), arcs: [] })
+  const stateRef = useRef({ points: new Map(), arcs: [], land: null })
   const [count, setCount] = useState(0)
   const [err, setErr] = useState(false)
+  const [tip, setTip] = useState(null) // { x, y, point } in canvas-local pixels, or null
+
+  // Same clip-space math as VERT_POINT/the Canvas2D fallback, inverted back
+  // to pixels for hit-testing — kept in one place so a hover always lands on
+  // the dot the eye actually sees, not a slightly-off approximation.
+  const toScreen = (lat, lon, w, h) => {
+    const [cx, cy] = project(lat, lon)
+    return [(cx + 1) / 2 * w, (1 - cy) / 2 * h]
+  }
+
+  const handlePointerMove = (e) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const mx = e.clientX - rect.left
+    const my = e.clientY - rect.top
+    const w = canvas.clientWidth, h = canvas.clientHeight
+    let best = null, bestD = 14 // px — a generous hit radius, points render small
+    for (const p of stateRef.current.points.values()) {
+      const [sx, sy] = toScreen(p.lat, p.lon, w, h)
+      const d = Math.hypot(sx - mx, sy - my)
+      if (d < bestD) { bestD = d; best = p }
+    }
+    setTip(best ? { x: mx, y: my, point: best } : null)
+  }
 
   // --- GL setup ---
   useEffect(() => {
@@ -247,13 +349,16 @@ export default function WorldMap() {
       line: program(gl, VERT_LINE, FRAG_LINE),
       grid: program(gl, VERT_GRID, FRAG_GRID),
     }
-    const bufs = { point: gl.createBuffer(), pmag: gl.createBuffer(), pcol: gl.createBuffer(), line: gl.createBuffer(), grid: gl.createBuffer() }
+    const bufs = { point: gl.createBuffer(), pmag: gl.createBuffer(), pcol: gl.createBuffer(), line: gl.createBuffer(), grid: gl.createBuffer(), land: gl.createBuffer() }
     const grid = buildGraticule()
     gl.bindBuffer(gl.ARRAY_BUFFER, bufs.grid)
     gl.bufferData(gl.ARRAY_BUFFER, grid, gl.STATIC_DRAW)
+    // Coastlines arrive asynchronously (the land-data effect below) and
+    // never change afterwards, so upload once — landData !== st.land is
+    // only ever true the one time a fresh Float32Array shows up.
+    let landData = null, landCount = 0
 
     let raf = 0
-    const t0 = performance.now()
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
@@ -262,9 +367,30 @@ export default function WorldMap() {
       gl.viewport(0, 0, canvas.width, canvas.height)
     }
 
+    // render is one frame; renderFrame does the actual GL work. Same
+    // try/catch-then-reschedule shape as the Canvas2D fallback's draw/
+    // drawFrame split (see its comment) — a WebGL call throwing is rarer
+    // than createRadialGradient's non-finite check, but the failure mode is
+    // identical (this loop only ever reschedules from its own tail, so one
+    // uncaught throw would silently end the animation forever) and costs
+    // nothing to guard against here too.
     const render = () => {
+      try {
+        renderFrame()
+      } catch (e) {
+        console.error('WorldMap: webgl frame failed, skipping it', e)
+      }
+      raf = requestAnimationFrame(render)
+    }
+
+    const renderFrame = () => {
       resize()
-      const now = (performance.now() - t0) / 1000
+      if (canvas.width <= 0 || canvas.height <= 0) return // not laid out yet
+      // Same raw epoch as a.born (see startCanvas2D's drawFrame comment) —
+      // mount-relative time here would make every arc's age permanently
+      // negative once this effect has been mounted a while before an arc is
+      // born, freezing the travelling pulse at each arc's start point.
+      const now = performance.now() / 1000
       const st = stateRef.current
 
       const bg = hexToRgb(readToken('--bg', '#0a0e18'))
@@ -281,6 +407,25 @@ export default function WorldMap() {
       gl.uniform3fv(gl.getUniformLocation(progs.grid, 'u_col'), hexToRgb(readToken('--axis', '#2a3550')))
       gl.uniform1f(gl.getUniformLocation(progs.grid, 'u_alpha'), 0.22)
       gl.drawArrays(gl.LINES, 0, grid.length / 2)
+
+      // Land outline — same grid shader (it is just coloured line segments),
+      // drawn more opaque than the graticule so the coastlines read as the
+      // map's actual subject.
+      if (st.land && st.land !== landData) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, bufs.land)
+        gl.bufferData(gl.ARRAY_BUFFER, st.land, gl.STATIC_DRAW)
+        landData = st.land
+        landCount = st.land.length / 2
+      }
+      if (landCount) {
+        gl.useProgram(progs.grid)
+        gl.bindBuffer(gl.ARRAY_BUFFER, bufs.land)
+        gl.enableVertexAttribArray(0)
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
+        gl.uniform3fv(gl.getUniformLocation(progs.grid, 'u_col'), hexToRgb(readToken('--axis', '#2a3550')))
+        gl.uniform1f(gl.getUniformLocation(progs.grid, 'u_alpha'), 0.6)
+        gl.drawArrays(gl.LINES, 0, landCount)
+      }
 
       // Arcs — additive.
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
@@ -317,16 +462,53 @@ export default function WorldMap() {
         gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0)
         gl.drawArrays(gl.POINTS, 0, pts.length)
       }
-
-      raf = requestAnimationFrame(render)
     }
     raf = requestAnimationFrame(render)
-    return () => { cancelAnimationFrame(raf) }
+    return () => {
+      cancelAnimationFrame(raf)
+      // Release the GPU-side objects explicitly rather than leaving them for
+      // the garbage collector — some WebView engines (WebKitGTK in
+      // particular, which BeeEye-desktop's Tauri window uses on Linux) are
+      // known to be unreliable about reclaiming a WebGL context that just
+      // goes out of scope, and switching away from this view (e.g. to
+      // Alerts) tears this context down on every single visit. Losing the
+      // context explicitly is the one step of this that actually matters —
+      // it tells the browser this GPU resource is done, on our terms, rather
+      // than whenever finalization gets around to it.
+      Object.values(progs).forEach((p) => p && gl.deleteProgram(p))
+      Object.values(bufs).forEach((b) => b && gl.deleteBuffer(b))
+      gl.getExtension('WEBGL_lose_context')?.loseContext()
+    }
+  }, [])
+
+  // --- land outline (fetched once; coastlines do not move) ---
+  useEffect(() => {
+    let alive = true
+    fetch('/world.geo.json')
+      .then((r) => r.json())
+      .then((geojson) => {
+        if (!alive) return
+        stateRef.current.land = buildLandSegments(geojson)
+      })
+      .catch(() => {
+        // The map still works without coastlines — just the graticule and
+        // glows, which is what this looked like before this existed.
+      })
+    return () => { alive = false }
   }, [])
 
   // --- data poll ---
   useEffect(() => {
     let alive = true
+    // Switching scope (live vs. one imported file, see the picker in
+    // Overview) starts from a clean map — otherwise an import's handful of
+    // points would just blend into whatever the live view had already
+    // plotted, which defeats the point of scoping to it at all.
+    const st0 = stateRef.current
+    st0.points.clear()
+    st0.arcs.length = 0
+    setCount(0)
+    const url = `/api/views/geopairs?limit=150${iface ? `&iface=${encodeURIComponent(iface)}` : ''}`
     const series = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => hexToRgb(readToken(`--series-${i}`, '#4da3ff')))
     const colorFor = (proto) => {
       let h = 0
@@ -335,21 +517,50 @@ export default function WorldMap() {
     }
     const poll = async () => {
       try {
-        const rows = await fetch('/api/views/geopairs?limit=150').then((r) => r.json())
+        const rows = await fetch(url).then((r) => r.json())
         if (!alive || !Array.isArray(rows)) return
         const st = stateRef.current
         const now = performance.now() / 1000
         let maxB = 1
         for (const r of rows) maxB = Math.max(maxB, r.bytes || 0)
+        // One arc per destination per poll, not per row: geopairs can list
+        // several connections to the same IP in one 4s window, and a map
+        // whose fastest-updating field is capped at "150 rows" should not
+        // fire dozens of arcs to the same point because of that.
+        const pulsedThisPoll = new Set()
         for (const r of rows) {
           if (r.lat === 0 && r.lon === 0) continue
           const key = `${r.lat.toFixed(2)},${r.lon.toFixed(2)}`
           const mag = Math.min(1, Math.log1p(r.bytes || 0) / Math.log1p(maxB))
           const existing = st.points.get(key)
-          st.points.set(key, { lat: r.lat, lon: r.lon, mag: Math.max(mag, existing?.mag || 0), col: colorFor(r.proto) })
-          // Fire an arc for connections we have not drawn before.
-          if (!existing) {
-            st.arcs.push({ born: now, data: new Float32Array(arc2d(ANCHOR.lat, ANCHOR.lon, r.lat, r.lon)) })
+          st.points.set(key, {
+            lat: r.lat, lon: r.lon, mag: Math.max(mag, existing?.mag || 0), col: colorFor(r.proto),
+            // Carried through for the hover tooltip (see handleMouseMove) —
+            // geo detail only, never re-derived here, so it stays exactly
+            // as honest as the backend's own geoip.Lookup was (region/city
+            // blank rather than guessed when only a Country-tier db is
+            // loaded; src fields blank for the ordinary "LAN device talks
+            // out" case where the source has no meaningful geo of its own).
+            dstIp: r.dst_ip, country: r.country, region: r.region, city: r.city, domain: r.domain,
+            srcIp: r.src_ip, srcCountry: r.src_country, srcRegion: r.src_region, srcCity: r.src_city,
+          })
+          // Fire a pulse for every poll that still sees traffic to this
+          // destination, not only the first time it is ever seen — a live
+          // map should keep animating for as long as data keeps arriving,
+          // not go static the moment every destination has been visited once.
+          if (!pulsedThisPoll.has(key)) {
+            pulsedThisPoll.add(key)
+            // Which way the pulse travels follows which way more of the
+            // traffic actually went — anchor→destination for an
+            // upload-heavy flow, destination→anchor for a download-heavy
+            // one — rather than always animating outward regardless of
+            // whether this device sent or received the data. Falls back to
+            // outward when direction is unknown (older rows / a flow with
+            // no local endpoint, tx_bytes and rx_bytes both 0).
+            const arcPath = (r.rx_bytes || 0) > (r.tx_bytes || 0)
+              ? arc2d(r.lat, r.lon, ANCHOR.lat, ANCHOR.lon)
+              : arc2d(ANCHOR.lat, ANCHOR.lon, r.lat, r.lon)
+            st.arcs.push({ born: now, data: new Float32Array(arcPath) })
             if (st.arcs.length > 60) st.arcs.shift()
           }
         }
@@ -366,7 +577,7 @@ export default function WorldMap() {
     poll()
     const id = setInterval(poll, 4000)
     return () => { alive = false; clearInterval(id) }
-  }, [])
+  }, [iface])
 
   if (err) {
     return (
@@ -381,12 +592,44 @@ export default function WorldMap() {
     <section className="card worldmap-card">
       <div className="card-title">
         {t('map.title')}
+        {iface && <span className="worldmap-scope" title={iface}>📥 {iface}</span>}
         <span className="worldmap-count">{t('map.destinations', { count })}</span>
       </div>
       <div className="worldmap-wrap">
-        <canvas ref={canvasRef} className="worldmap-canvas" />
+        <canvas
+          ref={canvasRef}
+          className="worldmap-canvas"
+          onMouseMove={handlePointerMove}
+          onMouseLeave={() => setTip(null)}
+        />
         <div className="worldmap-note">{t('map.anchorNote')}</div>
+        {tip && (
+          <div
+            className="worldmap-tooltip"
+            style={{ left: Math.min(tip.x + 14, (canvasRef.current?.clientWidth || 0) - 210), top: tip.y + 14 }}
+          >
+            {tip.point.srcCountry && (
+              <div className="wt-row">
+                <span className="wt-label">{t('map.tooltipSrc')}</span>
+                <span>{formatGeo(tip.point.srcCountry, tip.point.srcRegion, tip.point.srcCity)}</span>
+              </div>
+            )}
+            <div className="wt-row">
+              <span className="wt-label">{t('map.tooltipDst')}</span>
+              <span>{formatGeo(tip.point.country, tip.point.region, tip.point.city)}</span>
+            </div>
+            {tip.point.domain && <div className="wt-domain">{tip.point.domain}</div>}
+            <div className="wt-ip dim">{tip.point.dstIp}</div>
+          </div>
+        )}
       </div>
     </section>
   )
+}
+
+// formatGeo joins whichever of country/region/city geoip actually resolved
+// — a Country-tier database (the common case) leaves region/city blank, and
+// this shows exactly what is known rather than padding with placeholders.
+function formatGeo(country, region, city) {
+  return [country, region, city].filter(Boolean).join(' · ') || '—'
 }
