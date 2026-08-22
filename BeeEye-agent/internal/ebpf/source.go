@@ -33,8 +33,8 @@ type rawFrameSource struct {
 // OpenEBPF loads the CO-RE program, attaches it to iface in both directions,
 // and switches it into raw-frame mode. The kernel/attach failure paths are
 // exactly Load/AttachInterface's — callers are expected to fall back to
-// AF_PACKET on any error, the same way live.Open falls back to the simulator
-// (see internal/capsource, which is where that fallback chain lives).
+// AF_PACKET on any error (see internal/capsource, which is where that
+// fallback chain lives; there is no further fallback past AF_PACKET, F43).
 func OpenEBPF(iface string) (live.Source, error) {
 	l, err := Load()
 	if err != nil {

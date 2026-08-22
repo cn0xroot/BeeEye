@@ -556,7 +556,7 @@ tr.proto-other .proto-dot { background: var(--proto-other); }
   font-variant-numeric: tabular-nums;
 }
 .statusbar b { color: var(--text); font-weight: 600; }
-.statusbar.simulated { background: rgba(250, 178, 25, 0.1); border-top-color: rgba(250, 178, 25, 0.4); }
+.statusbar.non-live { background: rgba(250, 178, 25, 0.1); border-top-color: rgba(250, 178, 25, 0.4); }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
 .dot.live {

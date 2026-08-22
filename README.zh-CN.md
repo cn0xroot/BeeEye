@@ -46,8 +46,8 @@ BeeEye 提供两个独立前端，因为它们回答的是**根本不同的问�
 >
 > `BeeEye-agent` 通过 `internal/livesource` 实时抓包 —— 与分析器相同的 AF_PACKET
 > 采集 —— 所以总览和分析器现在描述的是同一台机器的真实网络（本机 `192.168.x.x`）。
-> 无抓包权限、或传 `-simulate` 时，agent 回退到内置模拟场景并在启动日志中标注，
-> 绝不把模拟当真实（F43）。详见 [PROGRESS.md §0](PROGRESS.md)。
+> 无抓包权限时，agent 以无采集流水线的方式运行并在启动日志中说明，不存在可以
+> 冒充真实数据的模拟兜底（F43）。详见 [PROGRESS.md §0](PROGRESS.md)。
 
 ---
 
@@ -89,7 +89,7 @@ BeeEye 提供两个独立前端，因为它们回答的是**根本不同的问�
 
 ### 抓真实的包
 
-eBPF 路径和分析器的 AF_PACKET 套接字都需要权限。**没有权限也不会失败** —— 分析器会回退到合成流量，并在状态栏用明确的文字说明。它永远不会把模拟包当作真实抓包呈现。
+eBPF 路径和分析器的 AF_PACKET 套接字都需要权限。没有权限时该来源就是打不开 —— 分析器的 Start 会直接把权限错误原样报出来，agent 会以无采集流水线的方式运行，而不是回退到任何合成数据。不存在可能被误当成真实抓包的模拟流量。
 
 不用 root 也能真实抓包：
 
@@ -163,7 +163,7 @@ BeeEye-agent/            Go module —— 两个二进制
   cmd/BeeEye-gui/        分析器入口
   internal/
     ebpf/                加载内核程序、读 ringbuf
-    live/                采集源：AF_PACKET、模拟器、帧构造
+    live/                采集源：AF_PACKET、帧构造
     dissect/             协议解剖 → 字段树 + 过滤索引
     dfilter/             显示过滤器语言
     procmap/             本机进程归属
@@ -216,7 +216,7 @@ make smoke          # 两个服务端到端
 
 **今天端到端可用的**：两个 UI、REST API、显示过滤器引擎、协议解剖器、检测引擎、pcap 导出、CUDA/CPU 色场 —— `scripts/smoke.sh` 检查其中 24 条路径，24 条全过。
 
-agent 已通过 AF_PACKET 实时抓包，仅在无抓包权限时回退到模拟场景（会标注）；把 eBPF ring buffer 接为更低开销的采集源是主要的后续采集任务（见上文提示）。
+agent 已通过 eBPF 实时抓包（回退到 AF_PACKET）；两者均无权限时以无数据方式运行，不存在任何合成兜底（见上文提示）。
 
 ---
 

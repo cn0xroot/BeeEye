@@ -1,14 +1,21 @@
 // Package live provides the real-time packet capture sources feeding the
 // Wireshark-style analyzer GUI (program.md §3.4 capture layer).
 //
-// Three sources implement the same Source interface so the GUI never knows
+// Two sources implement the same Source interface so the GUI never knows
 // which one is attached:
 //
 //  1. eBPF ringbuf  — future: kernel ≥5.8 + BTF, the production path (§3.4)
 //  2. AF_PACKET     — now: a raw socket on the chosen interface, no CGO,
 //     no libpcap; needs CAP_NET_RAW
-//  3. simulator     — fallback: replays a synthetic home-network trace in
-//     real time so the UI is exercisable without privileges
+//
+// There is deliberately no third, simulated fallback: this project's whole
+// premise is showing what is actually on the network, and a synthetic trace
+// that looks like real capture — sitting in the exact same tables, with
+// nothing at rest ever marking a row as fabricated — turned out to be worse
+// than no data at all (see git history around "remove the simulation
+// feature" for the concrete household of phantom devices this produced).
+// When neither real source is available, Open just says so; callers show
+// that honestly rather than papering over it.
 //
 // Interface names are never hardcoded (F16); every source takes the name from
 // configuration and records it on each packet (F17).
@@ -41,7 +48,7 @@ type Packet struct {
 
 // Source is a running capture. Packets() is closed when the source stops.
 type Source interface {
-	Name() string           // source kind, e.g. "af_packet" / "simulator"
+	Name() string           // source kind, e.g. "af_packet" / "ebpf"
 	Iface() string          // interface being captured
 	Packets() <-chan Packet // stream of frames
 	Stats() Stats           // live counters
@@ -55,8 +62,10 @@ type Stats struct {
 	Bytes    int64 `json:"bytes"`
 }
 
-// ErrNoPermission is returned when the kernel refuses the raw socket — the
-// caller is expected to fall back to the simulator rather than fail hard.
+// ErrNoPermission is returned when the kernel refuses the raw socket. There
+// is no fallback source to hand the caller instead — see this package's own
+// doc comment for why — so this is a hard failure the caller surfaces as
+// "capture unavailable," with the setcap command below as the fix.
 var ErrNoPermission = errors.New("raw capture requires CAP_NET_RAW (run as root, or: setcap cap_net_raw,cap_net_admin+ep ./BeeEye-gui)")
 
 // DefaultSnapLen mirrors the usual Wireshark default.
@@ -99,18 +108,20 @@ func ListInterfaces() ([]IfaceInfo, error) {
 	return out, nil
 }
 
-// Open returns the best available capture source for iface, falling back to
-// the simulator when the raw socket is not permitted. The bool reports whether
-// the capture is real (true) or simulated (false) — the UI labels it honestly
-// instead of implying live data it does not have. The returned error is the
-// reason for the fallback and is nil only when the capture is real.
+// Open opens a real AF_PACKET capture on iface. The bool is always true and
+// the error always nil on success — kept in the return signature because
+// every caller already destructures (Source, bool, error) and there is no
+// value in touching every call site for what the bool now always says. On
+// failure, src is nil: there is no fallback to fall back to, so a caller
+// must treat this as "no capture is possible right now," not "here is a
+// substitute."
 func Open(iface string, snaplen int, promisc bool) (Source, bool, error) {
 	if snaplen <= 0 {
 		snaplen = DefaultSnapLen
 	}
 	src, err := OpenAFPacket(iface, snaplen, promisc)
-	if err == nil {
-		return src, true, nil
+	if err != nil {
+		return nil, false, err
 	}
-	return OpenSimulated(iface), false, err
+	return src, true, nil
 }

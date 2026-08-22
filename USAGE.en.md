@@ -50,7 +50,7 @@ Then open:
 
 Stop: `./start.sh stop`　Status: `./start.sh status`　Logs: `./start.sh logs`
 
-> **Data source**: both UIs now run on **real AF_PACKET capture** on this host, describing the same real network. Without capture permission, or with `-simulate`, the agent falls back to the simulated scenario and says so in the startup log (F43). See [PROGRESS.en.md §0](PROGRESS.en.md).
+> **Data source**: both UIs now run on **real AF_PACKET capture** on this host, describing the same real network. Without capture permission, the agent runs with no capture pipeline and says so in the startup log — there is no simulated scenario to fall back to (F43). See [PROGRESS.en.md §0](PROGRESS.en.md).
 
 ---
 
@@ -120,7 +120,7 @@ options:
 
 ## 4. Granting capture permissions
 
-Both the eBPF path and the analyzer's AF_PACKET socket need privileges. **Nothing fails without them** — the analyzer falls back to synthetic traffic and labels it "simulated" in the status bar explicitly. It never presents simulated packets as a real capture.
+Both the eBPF path and the analyzer's AF_PACKET socket need privileges. Without them, that source simply cannot open — the analyzer's Start call returns the permission error outright rather than falling back to synthetic traffic. There is no simulated state left that could be presented as a real capture.
 
 Real capture without root, one command:
 
@@ -169,7 +169,6 @@ detection:                    # detection-engine thresholds, all tunable
     low: 15
   auto_block: false           # F38 automatic high-risk blocking, off by default
 
-simulate_seed: 42             # the simulated scenario's random seed (reproducible)
 port_service_map_file: "./config/port-service-map.yaml"
 ```
 
@@ -537,8 +536,8 @@ A CSS/JSX edit applies instantly, no rebuild needed, and never interrupts a runn
 
 | Symptom | Cause & fix |
 |---|---|
-| Overview has no devices/connections | the agent falls back to simulated data without capture permission. Grant it: `./start.sh --setcap` then `restart`; or confirm real traffic is passing through the NIC |
-| Analyzer status bar shows "simulated" / `real_capture: false` | no capture permission. Run `./start.sh --setcap` then `restart` |
+| Overview has no devices/connections | the agent has no capture pipeline without capture permission (it never fabricates data). Grant it: `./start.sh --setcap` then `restart`; or confirm real traffic is passing through the NIC |
+| Analyzer's Start call fails / `real_capture: false` after a running capture | no capture permission. Run `./start.sh --setcap` then `restart` |
 | `./start.sh` reports a tool not found | install the named tool; `vmlinux.h` generation needs `bpftool` and a BTF-enabled kernel |
 | 5173/5174 won't open | they only start with `--dev`; confirm you used `./start.sh --dev` |
 | `BeeEye-tlspeek` reports a permission error | needs `cap_bpf,cap_perfmon`, see the grant command in §9.1/§9.3 |

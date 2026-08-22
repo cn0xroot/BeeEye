@@ -71,8 +71,8 @@ export default function App() {
     return () => clearInterval(t)
   }, [loadCore])
 
-  // Data source (live vs simulated) is decided at startup and does not change,
-  // so fetch it once (F43).
+  // Data source (live vs unavailable — there is no simulated state, F43) is
+  // decided at startup and does not change, so fetch it once.
   useEffect(() => { api.source().then(setSource).catch(() => setSource(null)) }, [])
 
   // Overview extras. Kept separate from the core load so a slow aggregate does

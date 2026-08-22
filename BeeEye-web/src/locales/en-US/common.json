@@ -131,7 +131,7 @@
   },
   "source": {
     "live": "● live · {{iface}}",
-    "simulated": "⚠ simulated"
+    "unavailable": "⚠ no capture"
   },
   "mitm": {
     "title": "Opt-in phone/computer decryption",

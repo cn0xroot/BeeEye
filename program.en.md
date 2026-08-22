@@ -82,7 +82,7 @@ Both are disabled by default and only take effect when explicitly enabled by the
 | F40 | Real-time capture & analysis GUI | A Wireshark-style three-pane live analyzer, separate from the Web overview UI: packet list / protocol field tree / hex dump, with start-stop capture, interface selection and live refresh |
 | F41 | Display-filter expressions | Wireshark-compatible display-filter syntax (field comparison `==`/`!=`/`>`/`<`, logical `&&`/`\|\|`/`!`, parentheses, `contains`, `matches` regexp, CIDR matching, bare protocol-name presence tests), with immediate syntax feedback rather than silent failure |
 | F42 | Isolation between the two UIs | The live analyzer and the Web overview UI must be separate processes on separate ports with separate frontend bundles and no shared database connection; a crash, restart or upgrade on either side must not affect the other |
-| F43 | Capture-source fallback, honestly labeled | The capture source is selected and degraded automatically in the order eBPF ringbuf → AF_PACKET → simulator; the source actually in effect must be labeled in the UI, and simulated data must never be presented as a real capture |
+| F43 | Capture-source fallback, honestly labeled | The capture source is selected and degraded automatically in the order eBPF ringbuf → AF_PACKET; the source actually in effect must be labeled in the UI, and when neither is available the UI reports "no data" outright — there is no synthetic-data fallback to present as a real capture (removed entirely 2026-08-21) |
 
 #### Should-have (P1)
 
@@ -183,7 +183,7 @@ Deployment form: a single Ubuntu Server host (x86 mini PC / NUC class), with all
 | Secondary dashboard (deep metric drill-down, optional) | Grafana | For advanced users/admins to freely drill into raw metrics; not the primary entry point for household members |
 | Live analyzer GUI (F40) | Separate Go process, separate port, separate frontend bundle | Fully isolated from the Web overview UI (F42); a headless gateway has no desktop session, so an Electron/native window could not run on the gateway itself, whereas a browser-served UI is reachable from Mac/Windows/phone directly |
 | GUI live streaming | Server-Sent Events (SSE) | The packet stream is one-way server→client; SSE needs only the standard library, reconnects automatically, and avoids a WebSocket dependency and upgrade handshake |
-| GUI capture source | AF_PACKET raw socket (no CGO) | Avoids the CGO dependency of gopacket+libpcap, keeping static linking and a small image; captures for real given CAP_NET_RAW, otherwise degrades to the simulator (F43) |
+| GUI capture source | AF_PACKET raw socket (no CGO) | Avoids the CGO dependency of gopacket+libpcap, keeping static linking and a small image; captures for real given CAP_NET_RAW, otherwise fails outright — no synthetic-data fallback (F43) |
 | Display filter (F41) | Hand-written lexer + recursive-descent parser | Syntax matches the muscle memory Wireshark users already have, zero dependencies, and expressions can be syntax-checked as they are typed |
 | Deployment | Docker Compose | Simplified deployment and version management; the eBPF Agent container needs host network mode |
 
@@ -813,15 +813,14 @@ Key behavior: selecting any field in the tree highlights the corresponding byte 
 
 #### 3.12.3 Capture-source priority and fallback (F43)
 
-Three implementations sit behind one `live.Source` interface, selected automatically:
+Two implementations sit behind one `live.Source` interface, selected automatically:
 
 | Priority | Implementation | Prerequisite | Notes |
 |---|---|---|---|
 | 1 | eBPF ringbuf | kernel ≥5.8 + BTF + CAP_BPF | production path, shares the §3.4 kernel program with the agent |
 | 2 | AF_PACKET raw socket | CAP_NET_RAW | current default; no CGO, no libpcap |
-| 3 | simulator | none | fallback with no privileges or no NIC; synthesizes real frame bytes in real time |
 
-**Honest labeling is mandatory**: the source actually in effect must be shown in the status bar. The simulator produces structurally genuine Ethernet frames (they go through the same dissector), but they are still not traffic that really happened on that NIC — presenting them as a real capture would be worse than showing nothing.
+**No third-tier fallback since 2026-08-21**: when neither can be opened, `live.Open`/`capsource.Open` return an error outright — nothing is synthesized. **Honest labeling is mandatory**: the source actually in effect must be shown in the status bar (`ebpf`/`af_packet`/`unavailable`). A simulator used to exist here, producing structurally genuine Ethernet frames (they went through the same dissector) as a fallback — but they were still not traffic that really happened on that NIC, and presenting them as a real capture would be worse than showing nothing, which is why that fallback path was removed outright rather than merely kept labeled.
 
 #### 3.12.4 Display-filter syntax (F41)
 
@@ -893,7 +892,7 @@ Although the two UIs run independently, three things must stay aligned, or the s
 - [ ] The live analyzer and the Web overview UI run simultaneously on different ports, and stopping either process leaves the other fully usable
 - [ ] The analyzer's packet list refreshes continuously while capturing; selecting a packet expands the full protocol field tree and highlights that field's bytes in the hex pane
 - [ ] The display filter correctly parses and applies at least: field equality/magnitude comparison, `contains`, `matches` regexp, CIDR matching, logical combinations and parentheses; a syntax error produces a clear message and does not interrupt a running capture
-- [ ] The active capture source (eBPF / AF_PACKET / simulator) is labeled honestly in the GUI status bar, and the simulator is never labeled as a real capture
+- [ ] The active capture source (eBPF / AF_PACKET) is labeled honestly in the GUI status bar, and "no data" is reported honestly when neither is available — there is no synthetic source that could be mislabeled as a real capture
 - [ ] Snaplen-truncated capture data never crashes the dissector; it shows as much as it could parse
 - [ ] A TLS ClientHello yields SNI, ALPN and JA3 correctly, with JA3 stable across repeated handshakes from one client and different across differing cipher lists
 - [ ] Exported pcap files open in Wireshark/tshark with identical packet contents

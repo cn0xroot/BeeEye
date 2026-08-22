@@ -28,11 +28,11 @@
 
 于是**总览 UI 和分析器 UI 现在描述的是同一个真实网络**（本机网段，如 `192.168.x.x`），两边数据一致。
 
-**降级仍然诚实（F43）**：无抓包权限，或 eBPF/AF_PACKET 均不可用，或传 `-simulate` 时，agent 回退到内置模拟场景，并在启动日志中明确标注 `SIMULATED traffic`，绝不把模拟当真实。总览 UI 顶栏有实时角标（`source-badge`）标注当前是 `ebpf`/`af_packet`/`simulated` 三者之一。
+**无抓包时诚实地显示"无数据"，而不是伪造（F43，2026-08-21 起彻底移除模拟回退）**：模拟场景（agent 侧固定十设备的 `capture.GenerateSimulated`、分析器侧持续生成合成包的 `live.OpenSimulated`）已连同 `-simulate` 参数和 `simulate_seed` 配置一起从代码库中删除。无抓包权限，或 eBPF/AF_PACKET 均不可用时，`live.Open`/`capsource.Open` 直接返回错误——agent 以无采集流水线的方式继续运行，分析器的 Start 直接失败——总览和分析器都诚实地显示"无数据/不可用"，不存在任何可以把假流量当真实展示的代码路径。总览 UI 顶栏角标（`source-badge`）标注当前是 `ebpf`/`af_packet`/`unavailable` 三者之一。
 
-**接口选择（F16）**：`captureIface` 依次尝试 config 里存在的接口 → 默认路由网卡 → `any`，所以 config 写的 `wlan0`/`eth0` 与本机不符时会自动落到真实网卡，而不是静默回退模拟。
+**接口选择（F16）**：`captureIface` 依次尝试 config 里存在的接口 → 默认路由网卡 → `any`，所以 config 写的 `wlan0`/`eth0` 与本机不符时会自动落到真实网卡，而不是对一张根本不存在的网卡静默报告"无数据"。
 
-**`internal/ebpf` 现状（2026-08-19 更新）**：CO-RE TC 程序已改造为支持"全量抓包模式"——新增 `EVT_RAW_FRAME` 事件类型 + `CFG_RAW_FRAME_MODE` 开关，开启后每个包无条件镜像完整原始帧（不再局限于 DNS/TLS 等选择性协议头），通过 `internal/ebpf.OpenEBPF` 包装成标准 `live.Source`，与 AF_PACKET 完全同构，可以直接喂给现有 dissect 流水线。`internal/capsource` 实现"eBPF 优先，失败回退 AF_PACKET，再回退模拟器"的三级链，`internal/livesource`（agent）已接入。
+**`internal/ebpf` 现状（2026-08-19 更新）**：CO-RE TC 程序已改造为支持"全量抓包模式"——新增 `EVT_RAW_FRAME` 事件类型 + `CFG_RAW_FRAME_MODE` 开关，开启后每个包无条件镜像完整原始帧（不再局限于 DNS/TLS 等选择性协议头），通过 `internal/ebpf.OpenEBPF` 包装成标准 `live.Source`，与 AF_PACKET 完全同构，可以直接喂给现有 dissect 流水线。`internal/capsource` 实现"eBPF 优先，失败回退 AF_PACKET"的两级链，两者均不可用时直接报错，不存在第三级模拟器兜底；`internal/livesource`（agent）已接入。
 
 **为何分析器（`internal/gui`）不用 eBPF**：实测发现（`bpftool prog show` 的 `run_cnt` 逐一核对）——本机内核上，TCX 链虽然允许多个独立程序同时 attach 到同一网卡的同一方向，但**只有最先 attach 的那个真正被内核调用**，第二个 attach"成功"（无报错）却永远收不到包（`run_cnt` 始终为 0，双方向交叉验证一致）。因此让 agent（常驻服务，最需要 eBPF 的低开销）独占 eBPF，分析器（按需启动的诊断工具）继续用一直稳定支持多读者的 AF_PACKET，而不是给这个内核特定的行为构建探测/重试/降级的自愈逻辑。详见 `internal/capsource/capsource.go` 与 `internal/gui/session.go` 里的对应注释。
 
@@ -85,7 +85,7 @@
 | F40 | 实时抓包分析 GUI | ✅ | 三窗格（包列表/协议树/十六进制）联动高亮、显示过滤器、模板菜单、色场、进程归属、**列点选排序**全部可用；实测在 `wlp9s0` 上抓到 6.9 万包、0 丢包 |
 | F41 | 显示过滤器表达式 | ✅ | `internal/dfilter`：逻辑/比较/contains/matches/CIDR/存在性，语法错误即时报错；前端不做第二套解析，校验与过滤同一个裁决者 |
 | F42 | 双 UI 运行隔离 | ✅ | 双二进制双端口；冒烟测试专门验证"挂起分析器后总览 API 仍应答" |
-| F43 | 采集源降级与如实标注 | 🟡 | `live.Open` 优先级降级并返回"是否真实"标志；分析器状态栏标注 `Source: af_packet`，agent 无抓包权限时启动日志标注 SIMULATED。**缺口**：总览 UI 页面上尚无"模拟/真实"角标（仅启动日志） |
+| F43 | 采集源降级与如实标注 | ✅ | 2026-08-21：彻底删除模拟回退（`capture.GenerateSimulated`、`live.OpenSimulated`、`-simulate`、`simulate_seed`）。`live.Open`/`capsource.Open` 打不开真实源时直接返回错误，agent 以无采集流水线继续运行、分析器 Start 直接失败；总览顶栏角标与分析器状态栏都只会显示 `ebpf`/`af_packet`/`pcap-file`/`unavailable`，不存在能把假数据当真实展示的代码路径 |
 
 ### P1 建议实现
 

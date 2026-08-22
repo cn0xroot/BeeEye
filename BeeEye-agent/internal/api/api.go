@@ -37,9 +37,9 @@ type Server struct {
 	reports *analyze.Store
 
 	// Data-source honesty (F43): what the overview is actually showing. Set by
-	// main once it knows whether the live capture opened or the simulator is
-	// standing in, so the UI can badge simulated data rather than passing it
-	// off as real. A hot-plug interface swap (F20) can call SetSource again
+	// main once it knows whether the live capture opened, so the UI can badge
+	// "unavailable" rather than silently showing an empty overview as if it
+	// were current. A hot-plug interface swap (F20) can call SetSource again
 	// from another goroutine after startup, so this is an atomic pointer to
 	// an immutable struct rather than three plain fields — otherwise a
 	// concurrent reader could see live=true paired with the previous iface.
@@ -71,10 +71,10 @@ type Server struct {
 	ifaceRateState ifaceRate
 
 	// pcapImporter replays an uploaded capture file through the live pipeline
-	// (livesource.ImportFile) so the overview reflects it, not just the
-	// simulated/live-captured history already in the store. Wired by main
-	// once st exists — same atomic-pointer treatment as tcap/mitmProxy above,
-	// since it is read from an HTTP handler goroutine.
+	// (livesource.ImportFile) so the overview reflects it, not just whatever
+	// live-captured history is already in the store. Wired by main once st
+	// exists — same atomic-pointer treatment as tcap/mitmProxy above, since
+	// it is read from an HTTP handler goroutine.
 	pcapImporter atomic.Pointer[func(io.Reader, string) error]
 
 	// importedAt records, per imported filename, the wall-clock moment
@@ -96,7 +96,7 @@ type sourceInfo struct {
 
 func New(st *store.Store, cfg *config.Config) *Server {
 	s := &Server{st: st, cfg: cfg, reports: analyze.NewStore(10), rate: newTrafficRate(), importedAt: map[string]time.Time{}}
-	s.src.Store(&sourceInfo{name: "simulated"})
+	s.src.Store(&sourceInfo{name: "unavailable"})
 	go s.rate.run()
 	return s
 }
@@ -106,8 +106,9 @@ func New(st *store.Store, cfg *config.Config) *Server {
 // livesource.Pipeline.SetByteSampler) — never from an HTTP handler.
 func (s *Server) AddTrafficBytes(tx, rx int64) { s.rate.Add(tx, rx) }
 
-// SetSource records whether the overview's data is a live capture or the
-// simulated scenario. Called at startup, and again by the hot-plug
+// SetSource records whether the overview's data is a live capture or
+// unavailable (no capture permission/interface — never a simulated
+// stand-in, see F43). Called at startup, and again by the hot-plug
 // supervisor (F20) whenever the capture interface changes.
 func (s *Server) SetSource(live bool, iface, name string) {
 	s.src.Store(&sourceInfo{live: live, iface: iface, name: name})
@@ -198,14 +199,15 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"status": "ok", "time": time.Now()})
 }
 
-// getSource tells the UI whether it is looking at real captured traffic or the
-// simulated scenario, so the overview can show an honest badge (F43).
+// getSource tells the UI whether it is looking at real captured traffic or
+// has no capture running at all, so the overview can show an honest badge
+// (F43) — there is no simulated state to report.
 func (s *Server) getSource(w http.ResponseWriter, r *http.Request) {
 	src := s.src.Load()
 	writeJSON(w, map[string]any{
 		"live":   src.live,
 		"iface":  src.iface,
-		"source": src.name, // "af_packet" | "simulated"
+		"source": src.name, // "af_packet" | "ebpf" | "pcap-file" | "unavailable"
 	})
 }
 

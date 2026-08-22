@@ -131,7 +131,7 @@
   },
   "source": {
     "live": "● 实时 · {{iface}}",
-    "simulated": "⚠ 模拟数据"
+    "unavailable": "⚠ 未采集"
   },
   "mitm": {
     "title": "手机/电脑端可选解密",

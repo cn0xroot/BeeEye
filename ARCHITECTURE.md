@@ -42,7 +42,7 @@ flowchart TB
     end
 
     subgraph GUI["进程 B：BeeEye-gui  ·  :8081"]
-        LIVE["internal/live<br/>AF_PACKET / 模拟器"]
+        LIVE["internal/live<br/>AF_PACKET"]
         DIS["internal/dissect<br/>分层字段树"]
         DF["internal/dfilter<br/>显示过滤器"]
         RENDER["internal/render<br/>流量色场 CUDA / CPU"]
@@ -81,9 +81,9 @@ flowchart TB
 > 把结果聚合成设备/连接/DNS/告警写入 SQLite。**总览和分析器现在描述同一个真实网络**
 > （本机 `192.168.x.x`）。
 >
-> 降级仍诚实（F43）：无 `CAP_NET_RAW` 或传 `-simulate` 时回退到模拟场景，并在启动日志标注
-> `SIMULATED`。接口选择（F16）：`captureIface` 依次尝试 config 存在的接口 → 默认路由网卡 → `any`，
-> 所以 config 里的 `wlan0`/`eth0` 与本机不符时会自动落到真实网卡。
+> 无数据时如实标注（F43）：无 `CAP_NET_RAW` 时以无采集流水线的方式运行，并在启动日志说明
+> 原因，不存在模拟场景兜底。接口选择（F16）：`captureIface` 依次尝试 config 存在的接口 →
+> 默认路由网卡 → `any`，所以 config 里的 `wlan0`/`eth0` 与本机不符时会自动落到真实网卡。
 >
 > `internal/ebpf`（CO-RE + ringbuf）独立可用、有挂载测试，作为更高效采集源待接入 ringbuf；
 > 当前真实抓包走 AF_PACKET 路径。详见 [PROGRESS.md](PROGRESS.md) §0。
@@ -194,16 +194,15 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    START(["用户点击「开始」"]) --> OPEN["live.Open 采集源回退链"]
+    START(["用户点击「开始」"]) --> OPEN["live.Open"]
 
     OPEN --> CHECK{"有 CAP_NET_RAW？"}
     CHECK -->|是| AFP["AF_PACKET 真实抓包<br/>real_capture = true"]
-    CHECK -->|否| SIM["内置模拟器<br/>real_capture = false"]
+    CHECK -->|否| FAIL["Start 直接返回权限错误<br/>不产生任何数据（F43，无模拟兜底）"]
 
-    SIM -.->|"状态栏明确标注「模拟」"| HONEST["绝不把模拟包<br/>当成真实抓包展示（F43）"]
+    style FAIL fill:#2a1810,color:#f7ece6,stroke:#a55200
 
     AFP --> RING["内存环形缓冲<br/>ring_size 20000"]
-    SIM --> RING
 
     RING --> DISSECT["dissect：分层字段树<br/>每个字段带 offset + length"]
     DISSECT --> INDEX["过滤索引"]
@@ -225,7 +224,6 @@ flowchart TB
 
     style CUDA fill:#12291c,color:#e9f2e7,stroke:#386a48
     style CPU fill:#12291c,color:#e9f2e7,stroke:#386a48
-    style HONEST fill:#2a1810,color:#f7ece6,stroke:#a55200
 ```
 
 ### 两个渲染后端为什么必须逐像素一致
@@ -356,17 +354,15 @@ stateDiagram-v2
     state "受限" as LIMITED
     state "eBPF 挂载成功" as EBPF
     state "AF_PACKET 抓包成功" as AFP
-    state "回退到模拟数据" as SIM
-    state "状态栏标注「模拟」" as LABEL
+    state "无数据，报告权限错误" as FAIL
 
     [*] --> CHECK
     CHECK --> FULL: root 或已 setcap
     CHECK --> LIMITED: 普通用户
     FULL --> EBPF
     FULL --> AFP
-    LIMITED --> SIM: 采集源回退链
-    SIM --> LABEL
-    LABEL --> [*]: 绝不把模拟当成真实
+    LIMITED --> FAIL: 两条采集路径都打不开
+    FAIL --> [*]: 不存在模拟数据兜底（F43）
     EBPF --> [*]
     AFP --> [*]
 ```
@@ -378,7 +374,7 @@ sudo setcap cap_net_raw,cap_net_admin+ep       BeeEye-agent/bin/BeeEye-gui
 sudo setcap cap_bpf,cap_net_admin,cap_perfmon+ep BeeEye-agent/bin/BeeEye-agent
 ```
 
-**没有权限时不会失败** —— 分析器回退到合成流量，并在状态栏用明确的文字说明。它永远不会把模拟包当作真实抓包呈现（F43）。
+**没有权限时该来源就是打不开** —— 分析器的 Start 直接把权限错误原样报出来，agent 以无采集流水线的方式运行。不存在可以被误当成真实抓包的合成流量（F43）。
 
 ---
 
@@ -418,7 +414,7 @@ BeeEye-agent/            Go module —— 三个二进制
   cmd/BeeEye-tlspeek/    TLS 明文捕获命令行（F14，网关本机）
   internal/
     ebpf/                加载内核程序、读 ringbuf          685 行
-    live/                采集源：AF_PACKET、模拟器          761 行
+    live/                采集源：AF_PACKET                761 行
     dissect/             协议解剖 → 字段树 + 过滤索引     1498 行
     dfilter/             显示过滤器语言                     409 行
     analyze/             离线 pcap 文件分析                1488 行

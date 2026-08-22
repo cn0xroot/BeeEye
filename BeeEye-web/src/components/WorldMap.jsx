@@ -632,7 +632,7 @@ export default function WorldMap({ iface } = {}) {
             capture polled before any external traffic has happened yet —
             not a broken map. Saying so beats leaving an unexplained blank
             canvas that reads as "this doesn't work" (same principle as
-            GeoAccuracyBadge and F43's real/simulated labeling elsewhere). */}
+            GeoAccuracyBadge and F43's live/unavailable labeling elsewhere). */}
         {count === 0 && <div className="worldmap-empty">{t('map.empty')}</div>}
         {tip && (
           <div

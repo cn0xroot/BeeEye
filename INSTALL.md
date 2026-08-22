@@ -106,8 +106,9 @@ Open:
 
 ## 4. Grant capture & decryption capabilities (no root)
 
-It runs without privileges (falling back to labelled simulated data), but real
-capture and HTTPS decryption need capabilities:
+It runs without privileges (with an honestly-labeled "no data" state — there
+is no simulated fallback), but real capture and HTTPS decryption need
+capabilities:
 
 ```bash
 ./start.sh --setcap
@@ -146,8 +147,8 @@ interfaces:
 
 Attach to the **LAN-side** interface, not the WAN side — after NAT the
 device-level identity is gone. If a configured interface does not exist, the
-program falls back to the default-route NIC rather than silently dropping to
-simulated data.
+program falls back to the default-route NIC rather than silently reporting no
+data for a NIC that was never actually there.
 
 ---
 
@@ -214,7 +215,7 @@ See [TLS-DECRYPT.md](TLS-DECRYPT.md) and [USAGE.md](USAGE.md) §9.
 | `/sys/kernel/btf/vmlinux missing` | kernel lacks BTF; use a generic kernel |
 | `bpftool: command not found` | `apt install linux-tools-$(uname -r)` |
 | `go: command not found` / too old | install Go ≥ 1.25 from upstream (§1) |
-| analyzer shows "simulated" | no capture permission; `./start.sh --setcap` then `restart` |
+| analyzer's Start fails with a permission error | no capture permission; `./start.sh --setcap` then `restart` |
 | overview has no devices/connections | same as above; or confirm real traffic on the NIC |
 | HTTPS decryption `attached:0` | missing `cap_bpf,cap_perfmon` (§4) |
 | 5173/5174 won't open | they start only with `./start.sh --dev` |

@@ -47,9 +47,9 @@ They share source packages at compile time and nothing at runtime.
 > `BeeEye-agent` captures live traffic through `internal/livesource` — the same
 > AF_PACKET capture the analyzer uses — so the overview and the analyzer now
 > describe the same machine's real network (`192.168.x.x` here). Without
-> raw-capture permission, or with `-simulate`, the agent falls back to the
-> built-in simulated scenario and says so in its startup log; it never passes
-> simulated flows off as real (F43). See [PROGRESS.en.md §0](PROGRESS.en.md).
+> raw-capture permission, the agent runs with no capture pipeline and says so
+> in its startup log; there is no simulated fallback to pass off as real data
+> (F43). See [PROGRESS.en.md §0](PROGRESS.en.md).
 
 ---
 
@@ -99,7 +99,7 @@ either route land in `.run/`.
 
 ### Capturing real packets
 
-Both the eBPF path and the analyzer's AF_PACKET socket need privileges. Without them **nothing fails** — the analyzer falls back to a synthetic trace and says so in its status bar, in as many words. It will never present simulated packets as a real capture.
+Both the eBPF path and the analyzer's AF_PACKET socket need privileges. Without them, capture on that source simply cannot start — the analyzer's Start call fails outright with the permission error, and the agent runs with no capture pipeline rather than falling back to anything synthetic. There is no simulated trace left that could be mistaken for a real capture.
 
 To capture for real without running as root:
 
@@ -193,7 +193,7 @@ BeeEye-agent/            Go module — both binaries
   cmd/BeeEye-gui/        analyzer entry point
   internal/
     ebpf/                loads the kernel program, reads the ringbuf
-    live/                capture sources: AF_PACKET, simulator, frame builders
+    live/                capture sources: AF_PACKET, frame builders
     dissect/             protocol dissection → field tree + filter index
     dfilter/             the display-filter language
     procmap/             local-process attribution
@@ -243,7 +243,7 @@ Notable checks, because they cover the things most likely to break silently:
 
 This is under active development. [PROGRESS.en.md](PROGRESS.en.md) tracks every requirement (F1–F44) with its real state and the specific gaps, and is kept in sync with the code. [ARCHITECTURE.md](ARCHITECTURE.md) explains how the pieces fit together, with diagrams.
 
-What works end to end today: both UIs, the REST API, the display-filter engine, the dissector, the detection engine, pcap export, and the CUDA/CPU colour field — `scripts/smoke.sh` checks 24 of those paths and all 24 pass. The agent captures live via AF_PACKET, falling back to the simulated scenario (announced) only without capture permission; wiring the eBPF ring buffer in as a lower-overhead source is the main remaining capture-path task (see the note above).
+What works end to end today: both UIs, the REST API, the display-filter engine, the dissector, the detection engine, pcap export, and the CUDA/CPU colour field — `scripts/smoke.sh` checks 24 of those paths and all 24 pass. The agent captures live via eBPF (falling back to AF_PACKET); without capture permission on either it runs with no data rather than anything synthetic (see the note above).
 
 ---
 

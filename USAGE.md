@@ -47,7 +47,7 @@ cd BeeEye
 
 停止：`./start.sh stop`　查看状态：`./start.sh status`　跟日志：`./start.sh logs`
 
-> **数据来源**：两个 UI 现在都基于**本机真实 AF_PACKET 抓包**，描述同一个真实网络。无抓包权限或加 `-simulate` 时 agent 回退到模拟场景并在启动日志标注（F43）。详见 [PROGRESS.md §0](PROGRESS.md)。
+> **数据来源**：两个 UI 现在都基于**本机真实 AF_PACKET 抓包**，描述同一个真实网络。无抓包权限时 agent 以无采集流水线的方式运行并在启动日志中说明，不存在模拟场景兜底（F43）。详见 [PROGRESS.md §0](PROGRESS.md)。
 
 ---
 
@@ -117,7 +117,7 @@ make smoke        # 端到端验证每个端点（24 项）
 
 ## 4. 抓真实的包（权限配置）
 
-eBPF 路径和分析器的 AF_PACKET 套接字都需要权限。**没有权限也不会失败** —— 分析器会回退到合成流量，并在状态栏用明确文字标注「模拟」。它永远不会把模拟包当作真实抓包呈现。
+eBPF 路径和分析器的 AF_PACKET 套接字都需要权限。没有权限时该来源就是打不开 —— 分析器的 Start 会直接把权限错误原样报出来，而不是回退到合成流量。不存在可能被误当成真实抓包的模拟包。
 
 不用 root 也能真实抓包，一条命令搞定：
 
@@ -166,7 +166,6 @@ detection:                    # 检测引擎阈值，全部可调
     low: 15
   auto_block: false           # F38 高危自动阻断，默认关闭仅告警
 
-simulate_seed: 42             # 模拟场景的随机种子（可复现）
 port_service_map_file: "./config/port-service-map.yaml"
 ```
 
@@ -538,8 +537,8 @@ mitm:
 
 | 现象 | 原因与解决 |
 |---|---|
-| 总览无设备/连接 | agent 无抓包权限时回退模拟。授权：`./start.sh --setcap` 后 `restart`；或检查是否有真实流量经过网卡 |
-| 分析器状态栏显示「模拟」/ `real_capture: false` | 没有抓包权限。运行 `./start.sh --setcap` 后 `restart` |
+| 总览无设备/连接 | agent 无抓包权限时以无采集流水线运行（不会伪造数据）。授权：`./start.sh --setcap` 后 `restart`；或检查是否有真实流量经过网卡 |
+| 分析器点 Start 报权限错误 / `real_capture: false` | 没有抓包权限。运行 `./start.sh --setcap` 后 `restart` |
 | `./start.sh` 报某工具 not found | 按提示装对应工具；`vmlinux.h` 相关需 `bpftool` 且内核带 BTF |
 | 5173/5174 打不开 | 它们只在 `--dev` 时启动；确认用了 `./start.sh --dev` |
 | `BeeEye-tlspeek` 报权限错误 | 需要 `cap_bpf,cap_perfmon`，见第 9 节授权命令 |

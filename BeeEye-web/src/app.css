@@ -394,8 +394,9 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
   .content { padding: 12px; }
 }
 
-/* Data-source honesty badge (F43). Live capture is affirmed quietly; simulated
- * data is flagged so nobody reads the scenario as their real network. */
+/* Data-source honesty badge (F43). Live capture is affirmed quietly; an
+ * unavailable capture is flagged so an empty overview doesn't read as "no
+ * network activity" when it actually means "not capturing at all". */
 .source-badge {
   margin-left: 8px;
   padding: 1px 7px;
@@ -406,8 +407,8 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
   vertical-align: middle;
   white-space: nowrap;
 }
-.source-badge.live { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
-.source-badge.sim  { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+.source-badge.live        { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+.source-badge.unavailable { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
 
 /* GeoIP cell: operator/ASN under the place line (F22). */
 .geo-cell { display: inline-flex; flex-direction: column; line-height: 1.25; }

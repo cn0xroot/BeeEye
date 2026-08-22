@@ -2,16 +2,17 @@
 // UI reads: devices, connections, DNS records and, periodically, risk events.
 //
 // It exists to close the gap the project carried for a while — the agent used
-// to populate its store from capture.GenerateSimulated, so the overview showed
-// ten fictional devices while the analyzer showed the real network. This runs
-// the same AF_PACKET capture the analyzer uses, dissects each frame, and
-// aggregates the results into the model types the store already persists, so
-// the two UIs finally describe the same traffic.
+// to populate its store from a one-shot fabricated scenario (since removed —
+// see main.go's legacySimulatedMACs), so the overview showed ten fictional
+// devices while the analyzer showed the real network. This runs the same
+// AF_PACKET capture the analyzer uses, dissects each frame, and aggregates
+// the results into the model types the store already persists, so the two
+// UIs finally describe the same traffic.
 //
-// The capture source falls back to the simulator when the kernel refuses a raw
-// socket (no CAP_NET_RAW), and Pipeline.Live reports which happened, so the API
-// can label the data honestly rather than presenting simulated flows as real
-// (F43).
+// Open returns an error when the kernel refuses a raw socket (no
+// CAP_NET_RAW) — there is no simulated fallback to hand the caller instead
+// (F43 taken to its conclusion: see internal/live's own doc comment) — so a
+// Pipeline this package hands back is always backed by real capture.
 package livesource
 
 import (
@@ -69,7 +70,12 @@ type Pipeline struct {
 	// alone.
 	byteSampler atomic.Pointer[func(tx, rx int64)]
 
-	live  bool // true = real capture, false = simulator (F43)
+	// live is always true today — Open only ever returns a Pipeline when
+	// capsource reported a real capture source, and there is no simulated
+	// fallback left to set this false (F43). Kept as a field, not hardcoded,
+	// so Live() stays a meaningful contract if a future source tier needs to
+	// report otherwise, rather than every caller assuming success == live.
+	live  bool
 	iface string
 
 	mu      sync.Mutex
@@ -174,12 +180,13 @@ func newPipeline(st *store.Store, src live.Source, real bool, cfg *config.Detect
 // fully read and its final flush written to the store.
 func (p *Pipeline) Wait() { <-p.done }
 
-// Live reports whether the capture is real (true) or the simulator (false).
+// Live reports whether the capture is real — always true today (F43, see the
+// live field's own comment).
 func (p *Pipeline) Live() bool    { return p.live }
 func (p *Pipeline) Iface() string { return p.iface }
 
 // Source names which capture source is actually running: "ebpf" | "af_packet"
-// | "simulator" (live.Source.Name()'s own values — see capsource.Open).
+// | "pcap-file" (live.Source.Name()'s own values — see capsource.Open).
 func (p *Pipeline) Source() string { return p.src.Name() }
 
 // SetIntel replaces the threat-intel snapshot the detection engine uses on

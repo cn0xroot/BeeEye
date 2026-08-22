@@ -43,8 +43,8 @@
     "source": "Source",
     "idle": "Idle",
     "capturing": "Capturing",
-    "simulated": "SIMULATED — not real traffic",
-    "simulatedHelp": "Real capture is unavailable on this host, so the analyzer is replaying a synthetic trace. Reason: {{reason}}",
+    "nonLive": "NOT LIVE",
+    "nonLiveHelp": "Real capture is unavailable on this host. Reason: {{reason}}",
     "renderer": "Colour field",
     "rendererCuda": "GPU (CUDA)",
     "rendererCpu": "CPU"

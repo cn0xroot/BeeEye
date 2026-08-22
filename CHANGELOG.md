@@ -4,6 +4,16 @@ All notable changes to BeeEye are documented in this file.
 
 [中文](CHANGELOG.zh-CN.md)
 
+## [1.3.1] — 2026-08-22
+
+### Removed
+
+- **The simulated-capture fallback is gone entirely** (F43 taken to its conclusion): both `internal/capture.GenerateSimulated` (the agent's one-shot, ten-fixed-device demo scenario) and `internal/live.OpenSimulated` (the analyzer's continuous synthetic packet generator) are deleted, along with the `-simulate` flag and `simulate_seed` config key. `internal/live.Open`/`internal/capsource.Open` now return an error when no real capture source can be opened, instead of degrading to a synthetic one — the overview and analyzer show a genuinely empty/unavailable state rather than fabricated traffic. This closes the real bug behind it: `internal/gui.Session.Start` used to call `startWith` unconditionally even when `live.Open` failed, so the analyzer could silently run on fake packets whenever real capture couldn't open — it now returns that error immediately instead. The "SIMULATED" source badge is retired from both frontends' status bars in favour of an honest "unavailable"/"not live" one.
+
+### Fixed
+
+- **A stale simulated scenario could permanently pollute the real device list**: before the removal above, a past run that had ever fallen back to the simulated scenario (a transient error opening the real capture source, or a `-simulate` run) left its ten fixed fabricated devices (`front-door-lock`, `kitchen-echo`, `synology-nas`, ...) written into the exact same `device_registry`/`connections`/`dns_records`/`events` tables real capture uses, with nothing at rest distinguishing them from real devices — so the overview kept showing phantom IoT devices that were never actually on the network, alongside the real ones. `main.go`'s `legacySimulatedMACs` keeps that fixed, known MAC list purely for this one-time migration cleanup: the moment the agent confirms real capture is working it calls `store.PurgeByMAC` to remove exactly those rows — verified on this machine's own database: device count dropped from 18 (10 fake + 8 real) to 8 real devices, and the fabricated hostnames disappeared from `/api/devices`.
+
 ## [1.3.0] — 2026-08-21
 
 ### Added

@@ -544,8 +544,11 @@ func (s *Server) analyzeLive(w http.ResponseWriter, r *http.Request) {
 	st := s.sess.Status()
 	c.Meta(fmt.Sprintf("live: %s (%s)", st.Iface, st.Source), st.Bytes, "Ethernet", 0)
 	if !st.RealCapture {
-		// The report must carry the same caveat the status bar does.
-		c.Warn("this analysis covers SIMULATED traffic, not a real capture")
+		// Zero-value case only (no Start call has ever succeeded this run) —
+		// there is no synthetic source left to produce this with real data
+		// present (F43). The report must carry the same caveat the status
+		// bar does.
+		c.Warn("no live capture has been started — this analysis covers no packets")
 	}
 	if st.Evicted > 0 {
 		c.Warn(fmt.Sprintf("%d packets were evicted from the in-memory ring before this analysis and are not included", st.Evicted))

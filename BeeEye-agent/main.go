@@ -4,9 +4,14 @@
 // AF_PACKET capture the analyzer uses (internal/livesource) — folding it into
 // devices, connections and DNS records, running the detection engine
 // (program.md §3.11) over the rolling window, and serving the REST API the
-// overview UI reads. When the kernel refuses a raw socket, or -simulate is
-// given, it falls back to the built-in simulated scenario and says so, so the
-// data is never passed off as real (F43).
+// overview UI reads. When the kernel refuses a raw socket, there is no
+// simulated fallback (F43 taken to its conclusion: this project shows what
+// is actually on the network, or honestly says it cannot right now — never a
+// synthetic stand-in indistinguishable from the real thing once it is
+// sitting in the same database tables). The overview runs with no live data
+// until real capture becomes possible — see internal/live's doc comment for
+// the reasoning and internal/capture's git history for what the old fallback
+// used to cost.
 package main
 
 import (
@@ -23,7 +28,6 @@ import (
 	"time"
 
 	"BeeEye/internal/api"
-	"BeeEye/internal/capture"
 	"BeeEye/internal/config"
 	"BeeEye/internal/detect"
 	"BeeEye/internal/geoip"
@@ -162,12 +166,16 @@ func (h *hotplugSupervisor) swapTo(iface string) {
 		p.SetTargetedCapture(h.tcap)
 		h.srv.SetTargetedCapture(h.tcap) // covers the "started with no pipeline" case: F11 was off until now
 	}
+	// livesource.Open only ever returns a Pipeline on success, and both
+	// capsource's eBPF and AF_PACKET tiers report real=true — so p.Live() is
+	// always true here. The false branch is kept only as a guard against a
+	// future capsource tier being added that doesn't hold that contract.
 	if p.Live() {
 		h.srv.SetSource(true, p.Iface(), p.Source())
 		log.Printf("蜂眼 BeeEye: hotplug switched capture to %s (live, %s)", p.Iface(), p.Source())
 	} else {
 		h.srv.SetSource(false, p.Iface(), p.Source())
-		log.Printf("蜂眼 BeeEye: hotplug switched to %s, but it has no raw-capture permission; SIMULATED traffic", p.Iface())
+		log.Printf("蜂眼 BeeEye: hotplug switched to %s, but it reported a non-live source", p.Iface())
 	}
 }
 
@@ -200,9 +208,25 @@ func hotplugVerb(ev live.LinkEvent) string {
 	return "appeared"
 }
 
+// legacySimulatedMACs are the ten fixed device MACs an older build of this
+// agent's now-removed simulated-scenario fallback (internal/capture,
+// deleted — see git history) used to write into device_registry/
+// connections/dns_records/events whenever it could not open a real capture
+// source. Nothing at rest ever marked those rows as fabricated, so an
+// on-disk database from before this fallback was removed can still have
+// them sitting alongside real devices. Kept here, not in a package, purely
+// so st.PurgeByMAC below has something to clean an old database with — this
+// is a one-time migration concern, not a live feature; a fresh database
+// never gets these rows in the first place.
+var legacySimulatedMACs = []string{
+	"00:11:d8:aa:00:01", "3c:84:27:bb:00:11", "a4:da:22:bb:00:12",
+	"c0:97:2f:cc:00:13", "f0:27:2d:dd:00:14", "60:6b:ff:ee:00:15",
+	"a4:5e:60:ff:00:16", "f0:18:9e:11:00:17", "44:65:0d:22:00:18",
+	"b0:e5:ed:33:00:19",
+}
+
 func main() {
 	cfgPath := flag.String("config", "config/config.yaml", "path to config.yaml")
-	forceSim := flag.Bool("simulate", false, "always use the built-in simulated scenario instead of live capture")
 	flag.Parse()
 
 	cfg, err := config.Load(*cfgPath)
@@ -240,13 +264,17 @@ func main() {
 	}
 	defer st.Close()
 
-	badIP, badDomain, badJA3 := capture.DemoIntel()
-	intel := detect.ThreatIntel{BadIPs: badIP, BadDomains: badDomain, BadJA3: badJA3}
+	// Empty until the real feed below populates it — no hand-injected demo
+	// entries (a fake C2 IP, a "malware-c2.example" domain) seeded into
+	// every run regardless of whether capture is real: those are exactly
+	// the kind of fabricated-but-indistinguishable-from-real data this
+	// project no longer ships (see main's own doc comment).
+	intel := detect.ThreatIntel{}
 
-	// Threat intel (F29): merge in a real public blocklist on top of the
-	// hand-injected demo entries. Loads any cached copy synchronously (no
-	// network wait on startup), then refreshes in the background — a feed
-	// outage never blocks capture, it just means using yesterday's list.
+	// Threat intel (F29): a real public blocklist. Loads any cached copy
+	// synchronously (no network wait on startup), then refreshes in the
+	// background — a feed outage never blocks capture, it just means using
+	// yesterday's list.
 	var tiStore *threatintel.Store
 	if cfg.ThreatIntel.Enabled {
 		feeds := threatintel.FeedsByName(cfg.ThreatIntel.Feeds)
@@ -276,54 +304,40 @@ func main() {
 		}
 	}()
 
-	// --- capture: real traffic first, simulated only as a labelled fallback.
-	//
-	// The agent used to always run the simulated scenario, which is why the
-	// overview and the analyzer disagreed. Now it captures the same live
-	// traffic the analyzer does; the simulator is reserved for -simulate or
-	// for a kernel that refuses a raw socket, and either way it is announced
-	// so the data is never passed off as real (F43).
+	// --- capture: real traffic only (F43 taken to its conclusion — see
+	// internal/live's doc comment for why there is no simulated fallback).
+	// If the kernel refuses a raw socket, the agent runs with no pipeline:
+	// the API and every existing row in the store are still served, but
+	// nothing new comes in until real capture becomes possible (a hot-plug
+	// interface swap, permissions granted and the process restarted, ...).
 	var pipeline *livesource.Pipeline
-	if !*forceSim {
-		iface := captureIface(cfg)
-		p, err := livesource.Open(st, iface, &cfg.Detection, intel)
-		if err != nil {
-			log.Printf("live capture unavailable (%v) — falling back to the simulated scenario", err)
-		} else if !p.Live() {
-			log.Printf("蜂眼 BeeEye: no raw-capture permission; SIMULATED traffic on %s. "+
-				"Grant it with: sudo setcap cap_net_raw,cap_net_admin+ep ./BeeEye-agent/bin/BeeEye-agent", p.Iface())
-			pipeline = p
-		} else {
-			log.Printf("蜂眼 BeeEye: capturing live on %s", p.Iface())
-			pipeline = p
+	iface := captureIface(cfg)
+	p, err := livesource.Open(st, iface, &cfg.Detection, intel)
+	if err != nil {
+		log.Printf("蜂眼 BeeEye: live capture unavailable on %s (%v). "+
+			"Grant it with: sudo setcap cap_bpf,cap_net_admin,cap_perfmon+ep ./BeeEye-agent/bin/BeeEye-agent "+
+			"(or cap_net_raw,cap_net_admin+ep for the AF_PACKET-only fallback). "+
+			"Running with no live data until then — the overview will not show fabricated traffic in its place.", iface, err)
+	} else {
+		log.Printf("蜂眼 BeeEye: capturing live on %s", p.Iface())
+		pipeline = p
+		// Historical cleanup, not a live feature: an on-disk database that
+		// ever ran an older build of this agent (before the simulated
+		// fallback was removed entirely) may still have the fixed ten
+		// fabricated devices that fallback used to write — see
+		// legacySimulatedMACs' own comment. Safe to always attempt: a MAC
+		// that was never inserted deletes zero rows.
+		if err := st.PurgeByMAC(legacySimulatedMACs); err != nil {
+			log.Printf("purge stale simulated devices: %v", err)
 		}
-		if pipeline != nil && tiStore != nil {
-			tiStore.OnUpdate(pipeline.SetIntel)
-		}
-		if pipeline != nil {
-			pipeline.SetTargetedCapture(tcapMgr)
-		}
-		sup.pipeline = pipeline
 	}
-	if pipeline == nil {
-		// -simulate, or live.Open itself errored: seed the one-shot scenario.
-		log.Printf("蜂眼 BeeEye: generating simulated scenario (seed=%d)…", cfg.SimulateSeed)
-		sc, err := capture.GenerateSimulated(st, cfg.SimulateSeed)
-		if err != nil {
-			log.Fatalf("simulate: %v", err)
-		}
-		eng := &detect.Engine{Cfg: &cfg.Detection, Intel: intel, Cats: sc.Categories}
-		conns, _ := st.Connections(store.ConnFilter{Limit: 100000})
-		dnsRecs, _ := st.DNSRecords("", 100000)
-		events := eng.Analyze(conns, dnsRecs, sc.BaselinePairs)
-		for i := range events {
-			if err := st.InsertEvent(&events[i]); err != nil {
-				log.Printf("insert event: %v", err)
-			}
-		}
-		log.Printf("detection complete: %d connections, %d dns records, %d risk events",
-			len(conns), len(dnsRecs), len(events))
+	if pipeline != nil && tiStore != nil {
+		tiStore.OnUpdate(pipeline.SetIntel)
 	}
+	if pipeline != nil {
+		pipeline.SetTargetedCapture(tcapMgr)
+	}
+	sup.pipeline = pipeline
 
 	// --- serve API + SPA ---
 	srv := api.New(st, cfg)
@@ -353,7 +367,7 @@ func main() {
 	if pipeline != nil {
 		srv.SetSource(pipeline.Live(), pipeline.Iface(), pipeline.Source())
 	} else {
-		srv.SetSource(false, "", "simulated")
+		srv.SetSource(false, "", "unavailable")
 	}
 
 	// MITM decryption (F45), on by default as of 2026-08-20: the proxy starts
@@ -381,12 +395,8 @@ func main() {
 	}
 
 	// Interface hot-plug (F20): react to a NIC appearing or disappearing
-	// instead of requiring a restart. -simulate opts out deliberately — the
-	// user asked for the simulated scenario specifically, so a real NIC
-	// showing up must not silently switch away from it.
-	if !*forceSim {
-		go sup.watch()
-	}
+	// instead of requiring a restart.
+	go sup.watch()
 
 	log.Printf("BeeEye API listening on %s  (web dir: %s)", cfg.ListenAddr, cfg.WebDir)
 	if err := http.ListenAndServe(cfg.ListenAddr, srv.Routes()); err != nil {
