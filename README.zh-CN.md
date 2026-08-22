@@ -228,7 +228,7 @@ BeeEye 不是凭空而来 —— 设计上直接借鉴了下面几个项目，�
 
 - **[Wireshark](https://www.wireshark.org/)** —— 三窗格（包列表 / 协议字段树 / 十六进制视图）布局、`internal/dfilter` 实现的兼容子集显示过滤器语法、以及 JA3/TLS 字段命名，全部有意沿用 Wireshark 的习惯，让肌肉记忆能直接复用。
 - **[eCapture](https://github.com/gojue/ecapture)** —— `BeeEye-tlspeek`（F14）的 uprobe TLS 明文捕获设计跟随 eCapture 开创的思路（挂载到加密库的读写函数上，不做 MITM、不需要在目标上装证书）。它的模块清单同时也是 BeeEye 自身缺口的路线图：GoTLS、GnuTLS、NSS 覆盖，以及 pcap+keylog 合并导出，目前仍是待办（见 [PROGRESS.md](PROGRESS.md) F14/F45）——正因为 eCapture 已经证明这些都可行,才把它们列进了计划。两个项目的能力边界在哪里分岔（本项目只做网关本机、且是故意的）见 [TLS-DECRYPT.md](TLS-DECRYPT.md)。
-- **[Pcap-Analyzer](https://github.com/HatBoy/Pcap-Analyzer)** —— 离线分析视图（协议/会话方/会话统计、凭证提取、文件提取、攻击模式启发式检测）的功能形态，`internal/analyze` 与总览 UI 的「抓包分析」页签都仿照了它的思路。
+- **[Pcap-Analyzer](https://github.com/HatBoy/Pcap-Analyzer)** —— 离线分析视图（协议/会话方/会话统计、凭证提取、文件提取、攻击模式启发式检测）的功能形态，`internal/analyze` 与分析器的「报告」页签都仿照了它的思路——协议/通信主机/会话对三个面板还更进一步，用了一条和色场同一套辉光调色板的 GPU 渲染柱状图，而不是纯表格。
 
 **依赖的开源库**
 

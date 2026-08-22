@@ -43,14 +43,18 @@ const (
 // drawn on a near-black ground where the muted variants read as grey-blue
 // mush rather than as eight distinguishable protocols.
 var ChannelColors = [][3]float32{
-	{0.180, 0.616, 1.000}, // #2e9dff blue    — tls
-	{1.000, 0.416, 0.122}, // #ff6a1f orange  — http
-	{0.000, 0.851, 0.573}, // #00d992 aqua    — dns
-	{1.000, 0.765, 0.102}, // #ffc31a yellow  — mqtt
-	{1.000, 0.302, 0.616}, // #ff4d9d magenta — arp
-	{0.369, 0.941, 0.290}, // #5ef04a green   — icmp
-	{0.671, 0.447, 1.000}, // #ab72ff violet  — tcp
-	{1.000, 0.322, 0.322}, // #ff5252 red     — other
+	{0.180, 0.616, 1.000}, // #2e9dff blue         — tls
+	{1.000, 0.416, 0.122}, // #ff6a1f orange        — http
+	{0.000, 0.851, 0.573}, // #00d992 aqua          — dns
+	{1.000, 0.765, 0.102}, // #ffc31a yellow        — mqtt
+	{0.737, 1.000, 0.149}, // #bcff26 chartreuse    — sip
+	{0.098, 0.941, 1.000}, // #19f0ff cyan          — sctp
+	{0.149, 0.216, 1.000}, // #2637ff indigo        — gtp
+	{0.980, 0.200, 1.000}, // #fa33ff pink-violet   — sim (also gsmtap)
+	{1.000, 0.302, 0.616}, // #ff4d9d magenta       — arp
+	{0.369, 0.941, 0.290}, // #5ef04a green         — icmp
+	{0.671, 0.447, 1.000}, // #ab72ff violet        — tcp
+	{1.000, 0.322, 0.322}, // #ff5252 red           — other
 }
 
 // ChannelRGB flattens the palette for a renderer, repeating the last slot if a
@@ -94,6 +98,18 @@ type Renderer interface {
 	// baseRGB is the ground/panel colour a fill fades to as it nears the
 	// baseline and the flat colour outside both filled regions.
 	RenderCurve(txValues, rxValues []float32, width, height int, timeS float32, txRGB, rxRGB, hotRGB, baseRGB [3]float32, out []byte) error
+	// RenderBars draws a ranked horizontal bar chart: one glowing bar per
+	// row, stacked top to bottom, each already normalized to [0,1] of the
+	// chart's own max (values[i]) and coloured with colorsRGB[i*3:i*3+3].
+	// Built for the analyzer's ported capture-report view (protocol share,
+	// top talkers, top conversations) so those panels share Render/
+	// RenderCurve's glow-and-bloom visual language instead of reading as a
+	// plainer tool bolted onto the analyzer — see program.md's Pcap-Analyzer
+	// acknowledgment for what this is replacing the look of. No sweep/time
+	// parameter: unlike the live field and traffic curve, a report's bars
+	// describe a capture that has already finished, so there is nothing live
+	// left to animate.
+	RenderBars(values, colorsRGB []float32, count, width, height int, hotRGB, baseRGB [3]float32, out []byte) error
 	Close() error
 }
 

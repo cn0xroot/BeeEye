@@ -27,6 +27,7 @@ var SignalWeights = map[string]int{
 	"fanout":             30,
 	"beacon":             25,
 	"dns_anomaly":        20,
+	"dns_tunnel":         25,
 	"ja3_mismatch":       15,
 	"first_target":       10,
 	"geo_anomaly":        10,
@@ -244,6 +245,14 @@ func (e *Engine) Analyze(conns []model.Connection, dns []model.DNSRecord, baseli
 	for mac, d := range e.DNSAnomaly(dns) {
 		add(mac, "", "dns_anomaly", map[string]any{
 			"nxdomain": d.NXDomain, "mean_entropy": round3(d.MeanEntropy)})
+	}
+
+	// --- DNS tunneling (F33's other gap: NXDOMAIN/DGA catches a failing or
+	// randomized name; this catches a *working* covert channel) ---
+	for mac, d := range e.DNSTunnel(dns) {
+		add(mac, "", "dns_tunnel", map[string]any{
+			"txt_null_ratio": round3(d.TXTNullRatio), "mean_query_len": round1(d.MeanQueryLen),
+			"max_per_domain": d.MaxPerDomain})
 	}
 
 	// --- first-target (§3.11.1) ---
@@ -507,6 +516,81 @@ func (e *Engine) DNSAnomaly(dns []model.DNSRecord) map[string]DNSAnomalyHit {
 		}
 	}
 	return out
+}
+
+// DNSTunnelHit is a device whose DNS traffic shows signs of tunneling — a
+// different pattern from DNSAnomalyHit's DGA/NXDOMAIN heuristic: a working
+// tunnel resolves fine (NOERROR) and its labels don't need to look random,
+// so that detector alone would miss it.
+type DNSTunnelHit struct {
+	TXTNullRatio float64 // fraction of this device's queries that were TXT/NULL
+	MeanQueryLen float64 // mean full query-name length
+	MaxPerDomain int     // most queries seen to a single apex domain
+}
+
+// DNSTunnel flags devices whose DNS traffic looks like a covert channel: a
+// burst of TXT/NULL queries (record types that can carry an arbitrary
+// payload, unlike A/AAAA), unusually long query names (an encoded payload
+// padded into the label), and a large share of queries concentrated under
+// one apex domain (repeatedly round-tripping data through subdomains of an
+// attacker-controlled zone). None of these alone is damning — a handful of
+// TXT lookups for SPF/DKIM is routine — so this requires a minimum volume
+// and the concentration pattern together with one of the other two, not a
+// single crossed threshold.
+func (e *Engine) DNSTunnel(dns []model.DNSRecord) map[string]DNSTunnelHit {
+	type acc struct {
+		total     int
+		txtNull   int
+		lens      []float64
+		perDomain map[string]int
+	}
+	byMAC := map[string]*acc{}
+	for _, r := range dns {
+		a := byMAC[r.MAC]
+		if a == nil {
+			a = &acc{perDomain: map[string]int{}}
+			byMAC[r.MAC] = a
+		}
+		a.total++
+		if r.QType == "TXT" || r.QType == "NULL" {
+			a.txtNull++
+		}
+		a.lens = append(a.lens, float64(len(r.Domain)))
+		a.perDomain[apexDomain(r.Domain)]++
+	}
+	const minVolume = 8
+	out := map[string]DNSTunnelHit{}
+	for mac, a := range byMAC {
+		if a.total < minVolume {
+			continue
+		}
+		ratio := float64(a.txtNull) / float64(a.total)
+		meanLen := meanF(a.lens)
+		maxPerDomain := 0
+		for _, n := range a.perDomain {
+			if n > maxPerDomain {
+				maxPerDomain = n
+			}
+		}
+		concentrated := maxPerDomain >= minVolume && float64(maxPerDomain) >= 0.7*float64(a.total)
+		if concentrated && (ratio >= 0.3 || meanLen >= 50) {
+			out[mac] = DNSTunnelHit{TXTNullRatio: ratio, MeanQueryLen: meanLen, MaxPerDomain: maxPerDomain}
+		}
+	}
+	return out
+}
+
+// apexDomain returns the last two labels of domain — grouping
+// "a1b2c3.data.tunnel.evil.com" and "d4e5f6.data.tunnel.evil.com" under
+// "evil.com" is what makes "many distinct subdomains, one apex" visible;
+// getting the exact public-suffix boundary right (co.uk, etc.) does not
+// matter for that purpose.
+func apexDomain(domain string) string {
+	parts := strings.Split(strings.TrimSuffix(domain, "."), ".")
+	if len(parts) < 2 {
+		return domain
+	}
+	return strings.Join(parts[len(parts)-2:], ".")
 }
 
 // ---------------- math helpers ----------------

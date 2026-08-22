@@ -19,6 +19,11 @@ int  BeeEyeRenderCurveFrame(const float *tx_values, const float *rx_values,
                             float hot_r, float hot_g, float hot_b,
                             float base_r, float base_g, float base_b,
                             unsigned char *out);
+int  BeeEyeRenderBarsFrame(const float *values, const float *colors_rgb,
+                           int count, int width, int height,
+                           float hot_r, float hot_g, float hot_b,
+                           float base_r, float base_g, float base_b,
+                           unsigned char *out);
 void BeeEyeRenderShutdown(void);
 */
 import "C"
@@ -95,6 +100,27 @@ func (r *cudaRenderer) RenderCurve(txValues, rxValues []float32, width, height i
 		(*C.uchar)(unsafe.Pointer(&out[0])))
 	if rc != 0 {
 		return fmt.Errorf("render: CUDA curve frame failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+func (r *cudaRenderer) RenderBars(values, colorsRGB []float32, count, width, height int, hotRGB, baseRGB [3]float32, out []byte) error {
+	if count <= 0 || width <= 0 || height <= 0 ||
+		len(values) < count || len(colorsRGB) < count*3 || len(out) < width*height*4 {
+		return errBadGeometry
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	rc := C.BeeEyeRenderBarsFrame(
+		(*C.float)(unsafe.Pointer(&values[0])),
+		(*C.float)(unsafe.Pointer(&colorsRGB[0])),
+		C.int(count), C.int(width), C.int(height),
+		C.float(hotRGB[0]), C.float(hotRGB[1]), C.float(hotRGB[2]),
+		C.float(baseRGB[0]), C.float(baseRGB[1]), C.float(baseRGB[2]),
+		(*C.uchar)(unsafe.Pointer(&out[0])))
+	if rc != 0 {
+		return fmt.Errorf("render: CUDA bars frame failed (code %d)", int(rc))
 	}
 	return nil
 }

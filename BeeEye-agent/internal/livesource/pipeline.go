@@ -19,6 +19,7 @@ import (
 	"io"
 	"log"
 	"net/netip"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -75,6 +76,13 @@ type Pipeline struct {
 	flows   map[string]*model.Connection // 5-tuple key → accumulating flow
 	devices map[string]*deviceSeen       // mac → what we know about it
 	cats    map[string]model.DeviceCategory
+	// pendingEvents holds "connection opened" rows for high-sensitivity
+	// devices (DeviceCategory.Sensitivity() == 3, i.e. locks/cameras, F5).
+	// Everything else only ever appears as the aggregated per-interval row
+	// flush() writes; these get drained and written by run() right after the
+	// packet that created them, so a lock/camera's new connection shows up
+	// within one packet rather than waiting up to FlushInterval.
+	pendingEvents []*model.Connection
 	// seenEvents dedupes alerts across flushes. Detection is a batch design
 	// re-run over the whole recent window every interval, so without this the
 	// same "first contact with 1.1.1.1" would be re-inserted every 5s and the
@@ -93,6 +101,15 @@ type deviceSeen struct {
 	firstTS  time.Time
 	lastTS   time.Time
 	dirty    bool
+
+	// Passive fingerprint fields (F1): parsed by internal/dissect but, before
+	// this, never threaded past the packet-detail tree — this is that wire.
+	// Set opportunistically as matching packets arrive; identity.Identify
+	// only uses whichever of these ended up non-empty.
+	dhcpParams  string // DHCP option 55, parameter request list
+	vendorClass string // DHCP option 60
+	userAgent   string // HTTP User-Agent
+	ssdpServer  string // SSDP's Server: header
 }
 
 // Open starts a capture on iface and returns a running pipeline. snaplen and
@@ -207,8 +224,31 @@ func (p *Pipeline) run() {
 				mgr.Feed(pkt)
 			}
 			p.ingest(dis.Packet(pkt))
+			// Write any lock/camera "connection opened" events queued by
+			// ingest. Done here rather than inside ingest so the hot path
+			// stays store-free except for this deliberate, low-volume
+			// exception (F5's whole point is that these events do not wait
+			// for the batch flush).
+			for _, ev := range p.drainEvents() {
+				if err := p.st.InsertConnection(ev); err != nil {
+					log.Printf("livesource: insert connection event: %v", err)
+				}
+			}
 		}
 	}
+}
+
+// drainEvents returns and clears any pending high-sensitivity connection
+// events queued by ingest.
+func (p *Pipeline) drainEvents() []*model.Connection {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.pendingEvents) == 0 {
+		return nil
+	}
+	evs := p.pendingEvents
+	p.pendingEvents = nil
+	return evs
 }
 
 // ingest folds one dissected packet into the running aggregates. It never
@@ -252,6 +292,18 @@ func (p *Pipeline) ingest(r *dissect.Result) {
 		p.seeDevice(dstMAC, r.Dst, r.Iface, r.TS)
 	}
 
+	// Passive fingerprint fields (F1): DHCP's own chaddr is authoritative for
+	// which device a DHCPDISCOVER/DHCPREQUEST's option 55/60/12 describe,
+	// even across a relay; HTTP User-Agent and SSDP's Server header simply
+	// describe whichever device sent this particular frame.
+	fpMAC := first(r.Fields["dhcp.hw.mac_addr"])
+	if fpMAC == "" {
+		fpMAC = srcMAC
+	}
+	if fpMAC != "" {
+		p.seeFingerprint(fpMAC, r)
+	}
+
 	// DNS: record queries/answers so the DNS view and the anomaly detector
 	// have something to work with.
 	if r.HasProtocol("dns") || r.HasProtocol("mdns") {
@@ -265,8 +317,10 @@ func (p *Pipeline) ingest(r *dissect.Result) {
 	}
 	key := flowKey(r)
 	c := p.flows[key]
-	if c == nil {
-		mac := srcMAC
+	newFlow := c == nil
+	var mac string
+	if newFlow {
+		mac = srcMAC
 		if !(srcOK && isLocal(srcIP)) {
 			mac = dstMAC // the local end is the device the flow belongs to
 		}
@@ -311,6 +365,18 @@ func (p *Pipeline) ingest(r *dissect.Result) {
 	if dstOK {
 		c.Internal = isLocal(dstIP)
 	}
+
+	// F5: locks/cameras (Sensitivity 3) get every connection logged as its
+	// own event instead of only appearing in the next aggregated flush, the
+	// way the eBPF kernel path already treats them (bpf/BeeEye.bpf.c). Fire
+	// once per flow, on the packet that opened it, then zero the running
+	// totals so this first packet isn't counted twice when flush() later
+	// writes the rest of the window's traffic on the same flow.
+	if newFlow && p.cats[mac].Sensitivity() == 3 {
+		ev := *c
+		p.pendingEvents = append(p.pendingEvents, &ev)
+		c.Packets, c.Bytes, c.TxBytes, c.RxBytes = 0, 0, 0, 0
+	}
 }
 
 func (p *Pipeline) ingestDNS(r *dissect.Result, srcMAC, dstMAC string) {
@@ -323,6 +389,7 @@ func (p *Pipeline) ingestDNS(r *dissect.Result, srcMAC, dstMAC string) {
 		TS:     r.TS,
 		Domain: names[0],
 		RCode:  rcodeName(first(r.FieldValues("dns.flags.rcode"))),
+		QType:  first(r.FieldValues("dns.qry.type")),
 		Iface:  r.Iface,
 	}
 	// The querier is the local device: on a query it is the source, on a
@@ -357,6 +424,45 @@ func (p *Pipeline) seeDevice(mac, ip, iface string, ts time.Time) {
 	d.dirty = true
 }
 
+// seeFingerprint records whichever passive-fingerprint fields (F1) this
+// packet carries against mac. It deliberately does nothing — not even a
+// p.devices lookup — for the overwhelming majority of packets that carry
+// none of these fields, and only marks the device dirty (due for an
+// UpsertDevice write at the next flush) when a field's value actually
+// changes, so a chatty device does not force a write every single packet
+// once its fingerprint has already been recorded once.
+func (p *Pipeline) seeFingerprint(mac string, r *dissect.Result) {
+	hostname := first(r.Fields["dhcp.option.hostname"])
+	dhcpParams := first(r.Fields["dhcp.option.request_list_item"])
+	vendorClass := first(r.Fields["dhcp.option.vendor_class_id"])
+	userAgent := first(r.Fields["http.user_agent"])
+	ssdpServer := first(r.Fields["ssdp.server"])
+	if hostname == "" && dhcpParams == "" && vendorClass == "" && userAgent == "" && ssdpServer == "" {
+		return
+	}
+	d := p.devices[mac]
+	if d == nil {
+		d = &deviceSeen{iface: r.Iface, firstTS: r.TS, wireless: isWireless(r.Iface)}
+		p.devices[mac] = d
+	}
+	changed := false
+	set := func(dst *string, v string) {
+		if v != "" && *dst != v {
+			*dst = v
+			changed = true
+		}
+	}
+	set(&d.hostname, hostname)
+	set(&d.dhcpParams, dhcpParams)
+	set(&d.vendorClass, vendorClass)
+	set(&d.userAgent, userAgent)
+	set(&d.ssdpServer, ssdpServer)
+	if changed {
+		d.lastTS = r.TS
+		d.dirty = true
+	}
+}
+
 // flush writes the accumulated flows, devices and a fresh detection pass to the
 // store. Flows are cleared after writing: each becomes one connection row per
 // interval, which is the same granularity the snapshot path uses.
@@ -370,7 +476,12 @@ func (p *Pipeline) flush() {
 			continue
 		}
 		d.dirty = false
-		id := identity.Identify(mac, d.hostname)
+		id := identity.Identify(mac, d.hostname, identity.Fingerprint{
+			DHCPParams:  d.dhcpParams,
+			VendorClass: d.vendorClass,
+			UserAgent:   d.userAgent,
+			SSDPServer:  d.ssdpServer,
+		})
 		p.cats[mac] = id.Category
 		access := "wired"
 		if d.wireless {
@@ -536,6 +647,17 @@ func detailKey(d map[string]any) string {
 	return b.String()
 }
 
+// isWireless asks the kernel, not the interface's own name. A name-based
+// guess ("starts with wl", "contains wlan") only covers the common systemd
+// predictable-naming and legacy wlanN cases — it misclassifies a renamed
+// interface (a custom udev rule, a distro that never adopted predictable
+// naming) or an older driver's own convention (ath0, ra0, ...) as wired, on
+// hardware this project's own dev box never happens to exercise but a real
+// user's very well might. /sys/class/net/<iface>/phy80211 is the same
+// naming-agnostic signal `iw dev` itself uses to enumerate wireless
+// interfaces — present for any 802.11 interface regardless of what it is
+// called, absent for everything else.
 func isWireless(iface string) bool {
-	return strings.HasPrefix(iface, "wl") || strings.Contains(iface, "wlan")
+	_, err := os.Stat("/sys/class/net/" + iface + "/phy80211")
+	return err == nil
 }

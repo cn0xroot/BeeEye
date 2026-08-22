@@ -1,12 +1,16 @@
 package gui
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +37,13 @@ type Server struct {
 // uprobes to the gateway's OpenSSL libraries and surfaces the plaintext. It is
 // best-effort: without CAP_BPF the analyzer runs fine, just without decryption.
 //
+// Folding an opened file into the overview's own store too is the
+// frontend's job (api.importToOverview, called from Toolbar's openFile) —
+// not this server's: CORS is already open on the overview's API
+// (Access-Control-Allow-Origin: *), so a plain client-side fetch reaches it
+// directly, and doing it here as well would double-import every file opened
+// through the UI.
+//
 // Process attribution (procmap) is owned by Session, not here — see
 // Session.LookupProcess — because it needs to run the moment a packet is
 // captured, not whenever an HTTP handler happens to ask about it.
@@ -52,6 +63,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/capture/start", s.start)
 	mux.HandleFunc("POST /api/capture/stop", s.stop)
 	mux.HandleFunc("POST /api/pcap/open", s.openFile)
+	mux.HandleFunc("GET /api/report", s.report)
+	mux.HandleFunc("GET /api/report/bars.png", s.reportBars)
+	mux.HandleFunc("GET /api/report/files/{fid}", s.reportFile)
 	mux.HandleFunc("POST /api/filter", s.setFilter)
 	mux.HandleFunc("POST /api/filter/validate", s.validateFilter)
 	mux.HandleFunc("GET /api/packets", s.packets)
@@ -60,6 +74,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/export/pcap", s.exportPCAP)
 	mux.HandleFunc("GET /api/render/info", s.renderInfo)
 	mux.HandleFunc("GET /api/render/frame.png", s.renderFrame)
+	mux.HandleFunc("GET /api/render/totals", s.renderTotals)
 	mux.HandleFunc("GET /api/analyze", s.analyzeLive)
 	mux.HandleFunc("GET /api/names", s.names)
 	mux.HandleFunc("GET /api/decrypt", s.decryptStatus)
@@ -134,11 +149,177 @@ func (s *Server) openFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.sess.OpenFile(file, hdr.Filename); err != nil {
+	defer file.Close()
+	// Read the whole upload into memory rather than handing the multipart
+	// reader straight to Session.OpenFile: analyze.Analyze below needs its
+	// own independent read of the same bytes once OpenFile's background
+	// consume() goroutine has started reading from it — sharing one live,
+	// singly-consumable reader between the two would be a race, not a
+	// shortcut. Bounded by maxPcapOpenBytes (512 MiB), same as the size this
+	// endpoint already caps.
+	data, err := io.ReadAll(file)
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	if err := s.sess.OpenFile(io.NopCloser(bytes.NewReader(data)), hdr.Filename); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	// Best-effort: the live packet-level session above is this endpoint's
+	// primary job and has already succeeded by this point, so a report
+	// computation failure (an exotic link type analyze.Analyze does not
+	// know, say) does not fail the request — the file is still open and
+	// inspectable, just without the summary/protocols/talkers view.
+	if rep, err := analyze.Analyze(bytes.NewReader(data), hdr.Filename, int64(len(data))); err != nil {
+		log.Printf("gui: report for %q: %v", hdr.Filename, err)
+		s.sess.SetReport(nil)
+	} else {
+		s.sess.SetReport(rep)
+	}
 	writeJSON(w, s.sess.Status())
+}
+
+// report returns the current capture-report as JSON — nil (a bare "null")
+// while idle or mid-live-capture, since there is no single finished file to
+// summarize yet.
+func (s *Server) report(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, s.sess.Report())
+}
+
+// reportFile serves one carved file's raw bytes as an opaque attachment,
+// never inline — the same "never rendered, always downloaded" policy the
+// overview's own file-carving view used, because these bytes came out of
+// arbitrary captured traffic and are not to be trusted as, say, an image
+// safe to decode in the browser.
+func (s *Server) reportFile(w http.ResponseWriter, r *http.Request) {
+	rep := s.sess.Report()
+	if rep == nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("no report loaded"))
+		return
+	}
+	fid := r.PathValue("fid")
+	for _, f := range rep.Files {
+		if f.ID != fid {
+			continue
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+f.Filename+"\"")
+		_, _ = w.Write(f.Data)
+		return
+	}
+	writeErr(w, http.StatusNotFound, fmt.Errorf("file %q not in this report", fid))
+}
+
+// reportBarsWidth/Height match the field frame's own resolution (render.
+// DefaultWidth/Height) — no reason for the report's charts to use a
+// different geometry than everything else this renderer draws.
+const (
+	reportBarsWidth  = render.DefaultWidth
+	reportBarsHeight = 220
+)
+
+// reportBars renders one of the report's ranked lists (protocols by bytes,
+// top talkers by bytes, top conversations by bytes) as a GPU/CPU bar-chart
+// frame (render.Renderer.RenderBars) — the same glow/bloom visual language
+// TrafficField and the overview's traffic trend already use, so this reads
+// as the same tool rather than a plainer chart pasted into it. kind selects
+// which list; count caps how many rows (bars) are drawn, since the field
+// this shares its renderer with has no notion of "too many rows" the way an
+// unbounded talkers list does.
+func (s *Server) reportBars(w http.ResponseWriter, r *http.Request) {
+	rep := s.sess.Report()
+	if rep == nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("no report loaded"))
+		return
+	}
+	kind := r.URL.Query().Get("kind")
+	count := 8
+	if n, err := strconv.Atoi(r.URL.Query().Get("count")); err == nil && n > 0 && n <= 16 {
+		count = n
+	}
+
+	type row struct {
+		bytes int64
+		proto string
+	}
+	var rows []row
+	switch kind {
+	case "protocols":
+		for _, p := range rep.Protocols {
+			rows = append(rows, row{p.Bytes, p.Protocol})
+		}
+	case "talkers":
+		for _, t := range rep.Talkers {
+			rows = append(rows, row{t.Bytes, ""}) // identity here is rank, not protocol
+		}
+	case "conversations":
+		for _, c := range rep.Conversations {
+			rows = append(rows, row{c.Bytes, c.AppProto})
+		}
+	default:
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown kind %q (want protocols, talkers or conversations)", kind))
+		return
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].bytes > rows[j].bytes })
+	if len(rows) > count {
+		rows = rows[:count]
+	}
+	if len(rows) == 0 {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("report has no %s", kind))
+		return
+	}
+
+	values := make([]float32, len(rows))
+	colors := make([]float32, len(rows)*3)
+	maxBytes := rows[0].bytes
+	for i, rr := range rows {
+		if maxBytes > 0 {
+			values[i] = float32(rr.bytes) / float32(maxBytes)
+		}
+		rgb := protoColor(rr.proto, i)
+		colors[i*3+0], colors[i*3+1], colors[i*3+2] = rgb[0], rgb[1], rgb[2]
+	}
+
+	height, _ := strconv.Atoi(r.URL.Query().Get("h"))
+	if height <= 0 || height > 2048 {
+		height = reportBarsHeight
+	}
+	hot := [3]float32{1.000, 0.976, 0.929}
+	base := [3]float32{0.043, 0.062, 0.118}
+	out := make([]byte, reportBarsWidth*height*4)
+	if err := s.sess.Renderer().RenderBars(values, colors, len(rows), reportBarsWidth, height, hot, base, out); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	png, err := render.EncodePNG(out, reportBarsWidth, height)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(png)
+}
+
+// protoColor picks a report bar's colour from the same validated palette the
+// field/packet-list use (render.ChannelColors, indexed the same way
+// renderChannel maps a protocol onto RenderChannels) — a protocols chart's
+// rows ARE those channel names, so it looks each one up for real and gets
+// the exact hue the field and packet list already show for it. A talkers
+// chart has no single "protocol" per row in that sense, so it falls back to
+// cycling the palette by the row's own rank (idx) — deterministic per chart,
+// not a shared counter that would make two requests colour the same row
+// differently depending on request order.
+func protoColor(proto string, idx int) [3]float32 {
+	if proto != "" {
+		for i, ch := range RenderChannels {
+			if strings.EqualFold(ch, proto) {
+				return render.ChannelColors[min(i, len(render.ChannelColors)-1)]
+			}
+		}
+	}
+	return render.ChannelColors[idx%len(render.ChannelColors)]
 }
 
 func (s *Server) setFilter(w http.ResponseWriter, r *http.Request) {
@@ -391,6 +572,21 @@ func (s *Server) renderInfo(w http.ResponseWriter, r *http.Request) {
 		"width":    render.DefaultWidth,
 		"height":   render.DefaultHeight,
 	})
+}
+
+// renderTotals answers "what does this capture's traffic actually consist
+// of" — a non-decaying bytes-per-channel total for the whole session (see
+// Session.channelBytes' own comment on why this is a separate counter from
+// the field's own rolling history), most directly useful for an offline
+// import: once a replayed file finishes, this is still the file's real
+// protocol composition, not a rolling window that has since scrolled it away.
+func (s *Server) renderTotals(w http.ResponseWriter, r *http.Request) {
+	totals := s.sess.ChannelTotals()
+	var sum int64
+	for _, v := range totals {
+		sum += v
+	}
+	writeJSON(w, map[string]any{"totals": totals, "total_bytes": sum})
 }
 
 // renderFrame renders one frame of the traffic colour field as a PNG.

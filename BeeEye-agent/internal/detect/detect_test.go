@@ -113,6 +113,51 @@ func TestDNSAnomalyDGA(t *testing.T) {
 	}
 }
 
+// A tunnel client repeatedly resolving well-formed-but-encoded TXT queries
+// against one apex domain must be flagged, even though every query succeeds
+// (NOERROR) and no single label looks like DGA gibberish — the pattern
+// DNSAnomaly's NXDOMAIN/entropy heuristic cannot see.
+func TestDNSTunnelFlagsTXTBurstToOneDomain(t *testing.T) {
+	e := testEngine()
+	var recs []model.DNSRecord
+	for i := 0; i < 12; i++ {
+		recs = append(recs, model.DNSRecord{
+			MAC: "iot", QType: "TXT", RCode: "NOERROR",
+			Domain: itoa(i) + "abcdef0123456789.data.tunnel.example.com",
+			TS:     time.Now().Add(time.Duration(i) * time.Second),
+		})
+	}
+	hits := e.DNSTunnel(recs)
+	hit, ok := hits["iot"]
+	if !ok {
+		t.Fatal("expected a DNS tunnel hit for iot")
+	}
+	if hit.MaxPerDomain != 12 {
+		t.Errorf("MaxPerDomain = %d, want 12", hit.MaxPerDomain)
+	}
+	if hit.TXTNullRatio != 1 {
+		t.Errorf("TXTNullRatio = %v, want 1", hit.TXTNullRatio)
+	}
+}
+
+// Ordinary browsing — plain A queries spread across many different sites —
+// must never trip the tunnel detector.
+func TestDNSTunnelIgnoresOrdinaryBrowsing(t *testing.T) {
+	e := testEngine()
+	var recs []model.DNSRecord
+	sites := []string{"example.com", "github.com", "cloudflare.com", "wikipedia.org", "golang.org"}
+	for i := 0; i < 20; i++ {
+		recs = append(recs, model.DNSRecord{
+			MAC: "laptop", QType: "A", RCode: "NOERROR",
+			Domain: sites[i%len(sites)],
+			TS:     time.Now().Add(time.Duration(i) * time.Second),
+		})
+	}
+	if hits := e.DNSTunnel(recs); len(hits) != 0 {
+		t.Errorf("expected no tunnel hits for ordinary browsing, got %+v", hits)
+	}
+}
+
 func ip(prefix string, i int) string { return prefix + itoa(i) }
 
 // A device with a steady ~10KB/hour history at 03:00 that suddenly moves

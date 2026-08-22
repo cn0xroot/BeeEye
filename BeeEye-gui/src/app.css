@@ -253,15 +253,39 @@ select:focus, .filter-input:focus {
   border-right: 1px solid var(--border);
 }
 .field-channels li {
+  position: relative;
   display: flex;
   align-items: center;
   padding-left: 8px;
   border-bottom: 1px solid rgba(34, 190, 220, 0.07);
+  overflow: hidden;
+  white-space: nowrap;
 }
 .field-channels li.hot { color: var(--accent); background: rgba(34, 190, 220, 0.07); }
+/* Protocol-share mode (offline import): a low-opacity fill behind the row,
+   proportional to that channel's share of the whole capture's bytes — the
+   list's row order stays RenderChannels' fixed order (it lines up row-for-
+   row with the field image itself), only the fill width and the trailing
+   percentage change. */
+.field-channels.with-share li { padding-right: 4px; }
+.field-chan-bar { position: absolute; inset: 0; left: 0; opacity: 0.28; pointer-events: none; }
+.field-chan-name { position: relative; z-index: 1; }
+.field-chan-pct {
+  position: relative; z-index: 1; margin-left: auto; padding-left: 6px;
+  font-variant-numeric: tabular-nums; opacity: 0.85;
+}
 
 .field-canvas { position: relative; overflow: hidden; }
-.field-canvas img { display: block; width: 100%; height: auto; image-rendering: auto; }
+/* The server always renders a fixed-resolution frame (render.DefaultWidth ×
+ * whatever height TrafficField.jsx requested) — `height: auto` used to let
+ * the image's own intrinsic aspect ratio drive its displayed height, so
+ * dragging the pane wider or narrower changed the field's height too (the
+ * whole pane visibly reflowing mid-resize, not just the picture inside it).
+ * TrafficField.jsx now pins height inline to the exact pixel value it asked
+ * the server to render at (FRAME_HEIGHT) so it stops tracking width; this
+ * rule intentionally does not set height, letting only width track the
+ * container — the frame stretches horizontally to fill it, same as before. */
+.field-canvas img { display: block; width: 100%; image-rendering: auto; }
 .field-idle {
   position: absolute;
   inset: 0;
@@ -272,6 +296,71 @@ select:focus, .filter-input:focus {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   font-size: 11px;
+}
+
+/* ------------------------------------------------------------ capture report */
+
+.mono { font-family: var(--mono); }
+.btn.ghost { background: transparent; border-color: transparent; }
+.btn.ghost:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border); }
+
+.main-tabs { display: flex; gap: 4px; margin: 0 12px; }
+.main-tabs button {
+  background: transparent; border: 1px solid transparent; border-bottom: none;
+  border-radius: 6px 6px 0 0; padding: 6px 14px; cursor: pointer;
+  color: var(--text-dim); font-size: 12px;
+}
+.main-tabs button:hover { background: var(--bg-hover); }
+.main-tabs button.active { background: var(--bg-panel); border-color: var(--border); color: var(--text); font-weight: 600; }
+
+.report-pane {
+  margin: 0 12px 10px; padding: 10px 14px; max-height: calc(100vh - 340px);
+  overflow: auto;
+}
+.report-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.report-tabs { display: flex; gap: 2px; flex-wrap: wrap; }
+.report-tabs button {
+  background: transparent; border: 1px solid var(--border); border-radius: 999px;
+  padding: 4px 12px; cursor: pointer; color: var(--text-dim); font-size: 11.5px;
+}
+.report-tabs button:hover { background: var(--bg-hover); }
+.report-tabs button.active { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
+.report-filename { margin-left: auto; color: var(--text-faint); font-family: var(--mono); font-size: 11px; }
+
+.report-warnings {
+  background: rgba(250, 178, 25, 0.12); border: 1px solid var(--warning);
+  color: var(--warning); border-radius: 6px; padding: 6px 10px; font-size: 12px; margin-bottom: 10px;
+}
+.report-warning-banner {
+  background: rgba(208, 59, 59, 0.12); border: 1px solid var(--danger);
+  color: var(--danger); border-radius: 6px; padding: 8px 12px; font-size: 12px; margin-bottom: 10px; line-height: 1.5;
+}
+
+.report-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.report-summary-tile { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.rst-value { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.rst-label { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+
+.report-chart-caption { font-size: 11px; color: var(--text-faint); margin-bottom: 6px; }
+.report-bars { display: block; width: 100%; border-radius: 6px; margin-bottom: 10px; }
+
+.report-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.report-table th {
+  text-align: left; padding: 5px 8px; color: var(--text-faint); font-weight: 600;
+  border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-panel);
+}
+.report-table td { padding: 5px 8px; border-bottom: 1px solid rgba(34, 190, 220, 0.07); }
+.report-table tr:hover td { background: var(--bg-hover); }
+.report-hash { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.report-sev { padding: 1px 8px; border-radius: 999px; font-size: 10.5px; text-transform: uppercase; font-weight: 700; }
+.report-sev-high { background: rgba(208, 59, 59, 0.18); color: var(--danger); }
+.report-sev-medium { background: rgba(250, 178, 25, 0.18); color: var(--warning); }
+.report-sev-low, .report-sev-info { background: rgba(159, 178, 204, 0.16); color: var(--text-dim); }
+.report-heuristic {
+  display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
+  margin-left: 5px; border-radius: 50%; border: 1px solid var(--text-faint); color: var(--text-faint);
+  font-size: 9px; cursor: help;
 }
 
 .render-badge {
@@ -376,6 +465,10 @@ tr.proto-tls   .proto-dot { background: var(--proto-tls); }
 tr.proto-http  .proto-dot { background: var(--proto-http); }
 tr.proto-dns   .proto-dot { background: var(--proto-dns); }
 tr.proto-mqtt  .proto-dot { background: var(--proto-mqtt); }
+tr.proto-sip   .proto-dot { background: var(--proto-sip); }
+tr.proto-sctp  .proto-dot { background: var(--proto-sctp); }
+tr.proto-gtp   .proto-dot { background: var(--proto-gtp); }
+tr.proto-sim   .proto-dot { background: var(--proto-sim); }
 tr.proto-arp   .proto-dot { background: var(--proto-arp); }
 tr.proto-icmp  .proto-dot { background: var(--proto-icmp); }
 tr.proto-tcp   .proto-dot { background: var(--proto-tcp); }
@@ -492,6 +585,7 @@ tr.proto-other .proto-dot { background: var(--proto-other); }
 @media (max-width: 720px) {
   .c-time, .c-len { display: none; }
   .field-body { grid-template-columns: 56px minmax(0, 1fr); }
+  .field-chan-pct { display: none; }
 }
 
 /* ------------------------------------------------- protocol-layer colouring

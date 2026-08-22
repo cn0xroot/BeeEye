@@ -308,6 +308,79 @@ extern "C" __global__ void beeeye_render_curve(
     out[o + 3] = 255;
 }
 
+// beeeye_render_bars draws a ranked horizontal bar chart: one glowing bar
+// per row, coloured per-row and blooming toward hot right at its own
+// leading tip — the analyzer's ported capture-report view (protocol share,
+// top talkers, top conversations) uses this so those panels share this
+// file's glow/bloom look instead of reading as a plainer chart bolted on.
+// No time_s/sweep: a report describes a capture that has already finished,
+// there is nothing live left to animate (see software.go's RenderBars,
+// which this must keep matching).
+//
+//   values     : [count], already normalized to [0,1] of the chart's own max
+//   colors_rgb : [count * 3], 0..1, one row's colour per triplet
+//   out        : RGBA8, width * height * 4 bytes
+#define BAR_GLOW_SIGMA 9.0f
+
+extern "C" __global__ void beeeye_render_bars(
+    const float *__restrict__ values,
+    const float *__restrict__ colors_rgb,
+    int count, int width, int height,
+    float hot_r, float hot_g, float hot_b,
+    float base_r, float base_g, float base_b,
+    unsigned char *__restrict__ out)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    float bandH = (float)height / (float)count;
+    int row = (int)((float)y / bandH);
+    if (row >= count) row = count - 1;
+    float bandPos = ((float)y - (float)row * bandH) / bandH;
+
+    // Ridge shaping: brightest at the row's vertical centre, tapering toward
+    // its top/bottom edge — mirrors beeeye_render_waterfall's channel bands,
+    // so a bar reads as the same kind of object as a field row.
+    float centre = 1.0f - fabsf(bandPos - 0.5f) * 2.0f;
+    float ridge = powf(clamp01(centre), 0.65f);
+    bool bandEdge = bandPos < 0.02f || bandPos > 0.98f;
+
+    float barLen = clamp01(values[row]) * (float)width;
+    float cr = colors_rgb[row * 3 + 0], cg = colors_rgb[row * 3 + 1], cb = colors_rgb[row * 3 + 2];
+    float lum = 0.299f * cr + 0.587f * cg + 0.114f * cb;
+    cr = clamp01(lum + (cr - lum) * CHROMA_BOOST);
+    cg = clamp01(lum + (cg - lum) * CHROMA_BOOST);
+    cb = clamp01(lum + (cb - lum) * CHROMA_BOOST);
+
+    float d = (float)x - barLen; // <=0 inside the bar, >0 past its tip
+    float r, g, b;
+    if (d <= 0.0f) {
+        r = base_r + (cr - base_r) * ridge;
+        g = base_g + (cg - base_g) * ridge;
+        b = base_b + (cb - base_b) * ridge;
+        float tip = clamp01(1.0f + d / 18.0f);
+        float bloom = tip * ridge * 0.65f;
+        r += (hot_r - r) * bloom;
+        g += (hot_g - g) * bloom;
+        b += (hot_b - b) * bloom;
+    } else {
+        float glow = expf(-d * d / (2.0f * BAR_GLOW_SIGMA * BAR_GLOW_SIGMA)) * ridge;
+        r = base_r; g = base_g; b = base_b;
+        float gw = glow * 0.8f;
+        r += (cr - r) * gw;
+        g += (cg - g) * gw;
+        b += (cb - b) * gw;
+    }
+    if (bandEdge) { r += 0.03f; g += 0.06f; b += 0.09f; }
+
+    int o = (y * width + x) * 4;
+    out[o + 0] = (unsigned char)(clamp01(r) * 255.0f + 0.5f);
+    out[o + 1] = (unsigned char)(clamp01(g) * 255.0f + 0.5f);
+    out[o + 2] = (unsigned char)(clamp01(b) * 255.0f + 0.5f);
+    out[o + 3] = 255;
+}
+
 // ---------------------------------------------------------------- host API
 //
 // A tiny C surface so CGO does not have to know about CUDA types. Device
@@ -328,6 +401,10 @@ static float *d_values = 0;
 static size_t d_values_cap = 0;
 static float *d_rx_values = 0;
 static size_t d_rx_values_cap = 0;
+static float *d_bar_values = 0;
+static size_t d_bar_values_cap = 0;
+static float *d_bar_colors = 0;
+static size_t d_bar_colors_cap = 0;
 
 extern "C" int BeeEyeRenderAvailable(void) {
     int count = 0;
@@ -430,10 +507,56 @@ extern "C" int BeeEyeRenderCurveFrame(const float *tx_values, const float *rx_va
     return 0;
 }
 
+extern "C" int BeeEyeRenderBarsFrame(const float *values, const float *colors_rgb,
+                                     int count, int width, int height,
+                                     float hot_r, float hot_g, float hot_b,
+                                     float base_r, float base_g, float base_b,
+                                     unsigned char *out)
+{
+    if (count <= 0 || width <= 0 || height <= 0) return -1;
+
+    size_t values_bytes = (size_t)count * sizeof(float);
+    size_t colors_bytes = (size_t)count * 3 * sizeof(float);
+    size_t out_bytes = (size_t)width * (size_t)height * 4;
+
+    if (values_bytes > d_bar_values_cap) {
+        if (d_bar_values) cudaFree(d_bar_values);
+        if (cudaMalloc((void **)&d_bar_values, values_bytes) != cudaSuccess) return -2;
+        d_bar_values_cap = values_bytes;
+    }
+    if (colors_bytes > d_bar_colors_cap) {
+        if (d_bar_colors) cudaFree(d_bar_colors);
+        if (cudaMalloc((void **)&d_bar_colors, colors_bytes) != cudaSuccess) return -2;
+        d_bar_colors_cap = colors_bytes;
+    }
+    if (out_bytes > d_out_cap) {
+        if (d_out) cudaFree(d_out);
+        if (cudaMalloc((void **)&d_out, out_bytes) != cudaSuccess) return -3;
+        d_out_cap = out_bytes;
+    }
+
+    if (cudaMemcpy(d_bar_values, values, values_bytes, cudaMemcpyHostToDevice) != cudaSuccess)
+        return -4;
+    if (cudaMemcpy(d_bar_colors, colors_rgb, colors_bytes, cudaMemcpyHostToDevice) != cudaSuccess)
+        return -4;
+
+    dim3 block(16, 16);
+    dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+    beeeye_render_bars<<<grid, block>>>(d_bar_values, d_bar_colors, count, width, height,
+        hot_r, hot_g, hot_b, base_r, base_g, base_b, d_out);
+
+    if (cudaGetLastError() != cudaSuccess) return -5;
+    if (cudaDeviceSynchronize() != cudaSuccess) return -6;
+    if (cudaMemcpy(out, d_out, out_bytes, cudaMemcpyDeviceToHost) != cudaSuccess) return -7;
+    return 0;
+}
+
 extern "C" void BeeEyeRenderShutdown(void) {
     if (d_intensity) { cudaFree(d_intensity); d_intensity = 0; d_intensity_cap = 0; }
     if (d_hue) { cudaFree(d_hue); d_hue = 0; d_hue_cap = 0; }
     if (d_out) { cudaFree(d_out); d_out = 0; d_out_cap = 0; }
     if (d_values) { cudaFree(d_values); d_values = 0; d_values_cap = 0; }
     if (d_rx_values) { cudaFree(d_rx_values); d_rx_values = 0; d_rx_values_cap = 0; }
+    if (d_bar_values) { cudaFree(d_bar_values); d_bar_values = 0; d_bar_values_cap = 0; }
+    if (d_bar_colors) { cudaFree(d_bar_colors); d_bar_colors = 0; d_bar_colors_cap = 0; }
 }

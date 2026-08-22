@@ -305,3 +305,82 @@ func (cpuRenderer) RenderCurve(txValues, rxValues []float32, width, height int, 
 func gaussGlow(dist float32) float32 {
 	return float32(math.Exp(-float64(dist*dist) / (2.0 * curveGlowSigma * curveGlowSigma)))
 }
+
+// barGlowSigma is RenderBars' counterpart to curveGlowSigma: how far, in
+// pixels, a bar's glow bleeds past its own tip.
+const barGlowSigma = 9.0
+
+// RenderBars is the portable implementation, computing exactly what
+// beeeye_render_bars computes in cuda/BeeEye_render.cu — same ridge shaping
+// per row as Render's channel bands, same chroma boost, and the same
+// tip-glow/bloom idea RenderCurve uses at a burst's peak, just applied to a
+// bar's leading edge instead of a line's height. Switching backends changes
+// only the speed.
+func (cpuRenderer) RenderBars(values, colorsRGB []float32, count, width, height int, hotRGB, baseRGB [3]float32, out []byte) error {
+	if count <= 0 || width <= 0 || height <= 0 {
+		return errBadGeometry
+	}
+	if len(values) < count || len(colorsRGB) < count*3 || len(out) < width*height*4 {
+		return errBadGeometry
+	}
+	bandH := float32(height) / float32(count)
+
+	for y := 0; y < height; y++ {
+		row := int(float32(y) / bandH)
+		if row >= count {
+			row = count - 1
+		}
+		bandPos := (float32(y) - float32(row)*bandH) / bandH
+		// Ridge shaping: brightest at the vertical centre of the row's band,
+		// tapering toward its top/bottom edge — the same shape Render uses
+		// for a channel row, so a bar reads as the same kind of object.
+		centre := 1 - abs32(bandPos-0.5)*2
+		ridge := float32(math.Pow(float64(clamp01(centre)), 0.65))
+		bandEdge := bandPos < 0.02 || bandPos > 0.98
+
+		barLen := clamp01(values[row]) * float32(width)
+		cr, cg, cb := colorsRGB[row*3+0], colorsRGB[row*3+1], colorsRGB[row*3+2]
+		lum := 0.299*cr + 0.587*cg + 0.114*cb
+		cr = clamp01(lum + (cr-lum)*chromaBoost)
+		cg = clamp01(lum + (cg-lum)*chromaBoost)
+		cb = clamp01(lum + (cb-lum)*chromaBoost)
+
+		for x := 0; x < width; x++ {
+			d := float32(x) - barLen // <=0 inside the bar, >0 past its tip
+			var r, g, b float32
+			if d <= 0 {
+				// Inside the bar: ridge-shaded fill, blooming toward hot right
+				// at the leading tip so the bar reads as lit from its own end
+				// rather than a flat-shaded rectangle.
+				r = baseRGB[0] + (cr-baseRGB[0])*ridge
+				g = baseRGB[1] + (cg-baseRGB[1])*ridge
+				b = baseRGB[2] + (cb-baseRGB[2])*ridge
+				tip := clamp01(1 + d/18) // d is <=0 here; d/18 → 0 near the tip
+				bloom := tip * ridge * 0.65
+				r += (hotRGB[0] - r) * bloom
+				g += (hotRGB[1] - g) * bloom
+				b += (hotRGB[2] - b) * bloom
+			} else {
+				// Past the tip: ground, plus the bar's own glow bleeding off
+				// its end — RenderCurve's segment glow, one-sided.
+				glow := float32(math.Exp(-float64(d*d)/(2.0*barGlowSigma*barGlowSigma))) * ridge
+				r = baseRGB[0]
+				g = baseRGB[1]
+				b = baseRGB[2]
+				gw := glow * 0.8
+				r += (cr - r) * gw
+				g += (cg - g) * gw
+				b += (cb - b) * gw
+			}
+			if bandEdge {
+				r, g, b = r+0.03, g+0.06, b+0.09
+			}
+			o := (y*width + x) * 4
+			out[o+0] = uint8(clamp01(r)*255 + 0.5)
+			out[o+1] = uint8(clamp01(g)*255 + 0.5)
+			out[o+2] = uint8(clamp01(b)*255 + 0.5)
+			out[o+3] = 255
+		}
+	}
+	return nil
+}

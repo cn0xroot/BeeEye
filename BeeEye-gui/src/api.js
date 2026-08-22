@@ -45,6 +45,7 @@ export const api = {
   interfaces: () => req('/api/interfaces'),
   status: () => req('/api/status'),
   renderInfo: () => req('/api/render/info'),
+  renderTotals: () => req('/api/render/totals'),
 
   start: (opts) => req('/api/capture/start', { method: 'POST', body: JSON.stringify(opts) }),
   stop: () => req('/api/capture/stop', { method: 'POST' }),
@@ -99,6 +100,15 @@ export const api = {
 
   pcapURL: (limit = 0) => `/api/export/pcap${limit ? `?limit=${limit}` : ''}`,
   frameURL: (h) => `/api/render/frame.png?h=${h}&t=${Date.now()}`,
+
+  // report is the capture-report view (program.md's Pcap-Analyzer-shaped
+  // summary/protocols/talkers/conversations/credentials/files/findings/geo
+  // breakdown) for whichever file OpenFile most recently opened — null while
+  // idle or mid-live-capture.
+  report: () => req('/api/report'),
+  reportBarsURL: (kind, { count = 8, h = 220 } = {}) =>
+    `/api/report/bars.png?kind=${kind}&count=${count}&h=${h}&t=${Date.now()}`,
+  reportFileURL: (fid) => `/api/report/files/${encodeURIComponent(fid)}`,
 }
 
 // streamPackets opens the SSE feed. Returns a close function.
@@ -172,8 +182,11 @@ export function layerRole(proto) {
   }
 }
 
-// protocolSlot maps a protocol name onto one of the eight fixed colour slots.
-// The mapping is by identity, never by rank: applying a filter that removes
+// protocolSlot maps a protocol name onto one of the fixed colour slots —
+// mirrors internal/gui/session.go's renderChannel, which is the field's own
+// classifier; this must stay in step with it (RenderChannels/ChannelColors)
+// or a packet's row colour and its field-heatmap row would disagree. The
+// mapping is by identity, never by rank: applying a filter that removes
 // every DNS packet must not repaint TLS in DNS's colour.
 export function protocolSlot(proto) {
   const p = (proto || '').toLowerCase()
@@ -181,6 +194,10 @@ export function protocolSlot(proto) {
   if (p.includes('http')) return 'http'
   if (p.includes('dns')) return 'dns'
   if (p.includes('mqtt')) return 'mqtt'
+  if (p.includes('sip')) return 'sip'
+  if (p.includes('sctp')) return 'sctp'
+  if (p.includes('gtp')) return 'gtp'
+  if (p.includes('sim') || p.includes('gsmtap')) return 'sim'
   if (p.includes('arp')) return 'arp'
   if (p.includes('icmp')) return 'icmp'
   if (p === 'tcp') return 'tcp'

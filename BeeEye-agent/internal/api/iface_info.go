@@ -168,6 +168,14 @@ func wirelessSignal(iface string) (dbm int, ok bool) {
 // off the kernel's own counters, and — when it is a WiFi adapter — the SSID
 // and channel it is associated to, the same facts a conky bar would show.
 func (s *Server) ifaceInfo(w http.ResponseWriter, r *http.Request) {
+	// The overview's NIC card polls this every 2s expecting a fresh sample
+	// each time (that is the entire point of showing a live rate); without
+	// this header a response lacking any explicit freshness lifetime is
+	// still fair game for a browser/intermediary to reuse under a heuristic
+	// cache, which reads as "the speed never updates" — the same class of
+	// staleness the frontend bundle itself was once bitten by (see the
+	// static-file handler's Cache-Control comment).
+	w.Header().Set("Cache-Control", "no-store")
 	src := s.src.Load()
 	if src == nil || src.iface == "" {
 		writeJSON(w, map[string]any{"available": false})

@@ -11,16 +11,15 @@
 //!
 //! This crate duplicates none of either frontend's React or Go code. What
 //! it does, in order:
-//!   1. Look for a BeeEye-gui backend already answering on :8081.
-//!   2. If none is running, spawn one (the CUDA build if present, matching
-//!      scripts/dev.sh's own preference) as a child process.
+//!   1. Look for a BeeEye-gui backend already answering on :8081, and a
+//!      BeeEye-agent backend already answering on :8080.
+//!   2. Spawn whichever of the two is not already running (the CUDA build of
+//!      each if present, matching scripts/dev.sh's own preference) as a
+//!      child process.
 //!   3. Stay on its own shell page (dist-placeholder/index.html) rather
 //!      than navigating away from it — that page polls both :8080 and
 //!      :8081 from JS and loads each into its own <iframe> once reachable,
-//!      switched by a tab bar. This crate never spawns the :8080 backend
-//!      (BeeEye-agent): that is the main long-running daemon, normally
-//!      started by start.sh/systemd with its own lifecycle independent of
-//!      this window.
+//!      switched by a tab bar.
 //!   4. On window close, stop both backends — the analyzer on :8081 and the
 //!      overview daemon (BeeEye-agent) on :8080 — regardless of which one
 //!      this instance itself started. Closing the only window this desktop
@@ -33,6 +32,19 @@
 //!      shell, "the window is BeeEye" beats "don't touch what I didn't
 //!      start." Running the stack independently of the desktop app, e.g.
 //!      for a headless gateway, is what start.sh/systemd are for.)
+//!
+//!      Step 1/2 used to only ever look at :8081 — BeeEye-agent was left for
+//!      "start.sh/systemd" to worry about, on the reasoning that it is the
+//!      main long-running daemon and its lifecycle should not depend on a
+//!      GUI window's. That reasoning never actually held here: the
+//!      window-close handler already stops BOTH backends unconditionally
+//!      (see point 4's own note about that trade already being made), so a
+//!      user who launched this app on its own — the installed .deb's
+//!      desktop-launcher entry, not `start.sh`/`dev.sh` first — got a
+//!      window whose Overview tab could never leave "not ready": nothing had
+//!      ever asked BeeEye-agent to start. Spawning both, symmetrically with
+//!      how both already get stopped, is that inconsistency resolved in the
+//!      one direction consistent with the rest of this file.
 
 use std::io::ErrorKind;
 use std::net::TcpStream;
@@ -46,18 +58,22 @@ use tauri::{Manager, WindowEvent};
 const GUI_PORT: u16 = 8081;
 const OVERVIEW_PORT: u16 = 8080;
 
-/// Holds the child process this instance spawned, if any, so it can be
-/// killed on window close. `None` means either nothing was spawned (a
-/// backend was already running) or spawning hasn't happened yet.
-struct ManagedChild(Mutex<Option<Child>>);
+/// Holds whichever child processes this instance spawned (0, 1 or 2 of
+/// them — gui, agent, both, or neither if both were already running), so
+/// they can be killed on window close. Empty means either nothing was
+/// spawned or spawning hasn't happened yet.
+struct ManagedChildren(Mutex<Vec<Child>>);
 
 pub fn run() {
     tauri::Builder::default()
-        .manage(ManagedChild(Mutex::new(None)))
+        .manage(ManagedChildren(Mutex::new(Vec::new())))
         .setup(|app| {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                if let Err(e) = ensure_backend(&handle) {
+                if let Err(e) = ensure_gui(&handle) {
+                    eprintln!("BeeEye-desktop: {e}");
+                }
+                if let Err(e) = ensure_agent(&handle) {
                     eprintln!("BeeEye-desktop: {e}");
                 }
             });
@@ -66,16 +82,16 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed) {
                 let taken = {
-                    let state = window.state::<ManagedChild>();
+                    let state = window.state::<ManagedChildren>();
                     let mut guard = match state.0.lock() {
                         Ok(g) => g,
                         Err(_) => return,
                     };
-                    guard.take()
+                    std::mem::take(&mut *guard)
                 };
-                if let Some(mut child) = taken {
+                for mut child in taken {
                     // The fast, direct path when this instance is the one
-                    // that spawned the analyzer backend.
+                    // that spawned a backend.
                     let _ = child.kill();
                     let _ = child.wait();
                 }
@@ -92,7 +108,7 @@ pub fn run() {
         .expect("error while running BeeEye-desktop");
 }
 
-fn ensure_backend(app: &tauri::AppHandle) -> Result<(), String> {
+fn ensure_gui(app: &tauri::AppHandle) -> Result<(), String> {
     if port_open(GUI_PORT) {
         return Ok(());
     }
@@ -101,9 +117,31 @@ fn ensure_backend(app: &tauri::AppHandle) -> Result<(), String> {
          (e.g. via scripts/dev.sh) before starting BeeEye-desktop"
             .to_string()
     })?;
-    let child = spawn_backend(&bin)?;
-    let state = app.state::<ManagedChild>();
-    *state.0.lock().map_err(|e| e.to_string())? = Some(child);
+    let child = spawn_gui(&bin)?;
+    push_child(app, child)
+}
+
+/// Overview's counterpart to ensure_gui — see this file's module doc for why
+/// both are spawned symmetrically now instead of only the analyzer.
+fn ensure_agent(app: &tauri::AppHandle) -> Result<(), String> {
+    if port_open(OVERVIEW_PORT) {
+        return Ok(());
+    }
+    let root = repo_root().ok_or_else(|| {
+        "cannot locate the BeeEye repo root from this executable's path".to_string()
+    })?;
+    let bin = find_agent_binary(&root).ok_or_else(|| {
+        "cannot locate a BeeEye-agent(-cuda) binary — set BEEEYE_AGENT_BIN or run one manually \
+         (e.g. via scripts/dev.sh) before starting BeeEye-desktop"
+            .to_string()
+    })?;
+    let child = spawn_agent(&bin, &root)?;
+    push_child(app, child)
+}
+
+fn push_child(app: &tauri::AppHandle, child: Child) -> Result<(), String> {
+    let state = app.state::<ManagedChildren>();
+    state.0.lock().map_err(|e| e.to_string())?.push(child);
     Ok(())
 }
 
@@ -248,7 +286,7 @@ fn pick_interface() -> String {
     "any".to_string()
 }
 
-fn spawn_backend(bin: &Path) -> Result<Child, String> {
+fn spawn_gui(bin: &Path) -> Result<Child, String> {
     let iface = pick_interface();
     let mut cmd = Command::new(bin);
     cmd.arg("-listen").arg(format!(":{GUI_PORT}")).arg("-iface").arg(&iface);
@@ -271,6 +309,54 @@ fn spawn_backend(bin: &Path) -> Result<Child, String> {
         // Inherit nothing interactive; a child window should not depend on
         // this process's stdio surviving.
         .stdin(Stdio::null())
+        .spawn()
+        .map_err(|e| match e.kind() {
+            ErrorKind::PermissionDenied => format!(
+                "{} exists but is not executable (needs raw-capture capabilities — see INSTALL.md §4)",
+                bin.display()
+            ),
+            _ => format!("failed to start {}: {e}", bin.display()),
+        })
+}
+
+/// Overview's counterpart to find_gui_binary — same override-then-repo-root
+/// search, just for BeeEye-agent(-cuda) instead. Takes root rather than
+/// calling repo_root() itself since ensure_agent already needs it separately
+/// (spawn_agent's cwd, and the -config path below).
+fn find_agent_binary(root: &Path) -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("BEEEYE_AGENT_BIN") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    for name in ["BeeEye-agent-cuda", "BeeEye-agent"] {
+        let candidate = root.join("BeeEye-agent").join("bin").join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// BeeEye-agent's counterpart to spawn_gui. Unlike BeeEye-gui, the agent
+/// takes no `-listen`/`-web` flags of its own — everything (listen_addr,
+/// web_dir, port_service_map_file, the geoip/threatintel cache dirs, ...)
+/// comes from config.yaml, and every one of those paths inside it is written
+/// relative to the process's own working directory, not the config file's
+/// location. `start.sh`/`scripts/dev.sh` always launch it from the repo
+/// root, so that is the assumption those relative paths are written under;
+/// setting the child's cwd to root (rather than trying to override each
+/// path individually — most of which have no flag to override at all) is
+/// what keeps that assumption true when a desktop launcher's own cwd is
+/// something else entirely (often $HOME).
+fn spawn_agent(bin: &Path, root: &Path) -> Result<Child, String> {
+    let cfg = root.join("config").join("config.yaml");
+    let mut cmd = Command::new(bin);
+    cmd.arg("-config").arg(&cfg).current_dir(root);
+
+    eprintln!("BeeEye-desktop: starting {} -config {} (cwd {})", bin.display(), cfg.display(), root.display());
+    cmd.stdin(Stdio::null())
         .spawn()
         .map_err(|e| match e.kind() {
             ErrorKind::PermissionDenied => format!(

@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import { api } from './api'
 import { useTheme, useFont, useSize } from './theme'
 import Header from './components/Header'
-import Analysis from './components/Analysis'
 import FilterPanel from './components/FilterPanel'
 import Overview from './components/Overview'
 import Mitm from './components/Mitm'
@@ -167,7 +166,6 @@ export default function App() {
           {view === 'connections' && <ConnectionsView connections={connections} />}
           {view === 'byIp' && <IPView rows={ipRows} devices={devices} />}
           {view === 'byProtocol' && <ProtocolView rows={protoRows} />}
-          {view === 'analysis' && <Analysis />}
           {view === 'mitm' && <Mitm />}
           {view === 'dns' && <DNSView records={dnsRows} devices={devices} />}
           {view === 'alerts' && (

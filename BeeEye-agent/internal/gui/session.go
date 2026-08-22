@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"BeeEye/internal/analyze"
 	"BeeEye/internal/dfilter"
 	"BeeEye/internal/dissect"
 	"BeeEye/internal/live"
@@ -26,18 +27,28 @@ import (
 // RenderChannels are the rows of the traffic colour field, in display order.
 // They are fixed for the life of the process: a field whose rows silently
 // change meaning is unreadable, so an unrecognised protocol falls into
-// "other" rather than claiming a row of its own.
-var RenderChannels = []string{"tls", "http", "dns", "mqtt", "arp", "icmp", "tcp", "other"}
+// "other" rather than claiming a row of its own. sip/sctp/gtp/sim were added
+// once those dissectors shipped (SIP/SCTP/GTP-U/GTP-C, SIMtrace-style
+// GSMTAP/SIM) — before this they had a real dissector but no row of their
+// own here, so telecom-signaling traffic silently fell into "other".
+var RenderChannels = []string{"tls", "http", "dns", "mqtt", "sip", "sctp", "gtp", "sim", "arp", "icmp", "tcp", "other"}
 
 // renderChannel maps a dissected packet onto one of RenderChannels.
 func renderChannel(r *dissect.Result) string {
-	for _, want := range []string{"tls", "http", "mqtt", "arp", "icmp"} {
+	for _, want := range []string{"tls", "http", "mqtt", "sip", "sctp", "gtp", "arp", "icmp"} {
 		if r.HasProtocol(want) {
 			return want
 		}
 	}
 	if r.HasProtocol("dns") || r.HasProtocol("mdns") {
 		return "dns"
+	}
+	// gsmtap is the radio-layer wrapper; sim is the ISO/IEC 7816-4 APDU
+	// payload it carries — either one puts this packet in the same row, since
+	// both describe the same SIM/mobile-radio traffic to someone reading the
+	// field.
+	if r.HasProtocol("gsmtap") || r.HasProtocol("sim") {
+		return "sim"
 	}
 	if r.HasProtocol("tcp") {
 		return "tcp"
@@ -91,6 +102,23 @@ type Session struct {
 	hist     *render.History
 	renderer render.Renderer
 	rotStop  chan struct{}
+	// channelBytes is a non-decaying running total, unlike hist (an 80ms-per-
+	// bucket, 1024-bucket-wide ring — real-time-driven, so anything it holds
+	// scrolls out after ~82s regardless of whether the capture that produced
+	// it is still running). An offline import can finish in well under a
+	// second, and "what protocols make up this file" needs to stay a stable,
+	// accurate answer for as long as the session stays open, not decay away
+	// on its own a minute or two after the import — see RenderChannels for
+	// why the field's rows are exactly these channel names.
+	channelBytes map[string]int64
+
+	// report is the capture-report view (program.md's Pcap-Analyzer-shaped
+	// summary/protocols/talkers/conversations/credentials/files/findings/geo
+	// breakdown), computed once when a file is opened rather than derived
+	// from the ring — the ring evicts under a live capture's own retention
+	// limit, but a report should describe the whole file regardless of size.
+	// nil for a live capture (no single finished file to summarize).
+	report *analyze.Report
 
 	// Persistent capture: every frame is streamed to a pcap file so a packet's
 	// bytes outlive the in-memory ring and its detail can be read back after
@@ -133,13 +161,14 @@ func NewSession(ringSize int) *Session {
 		ringSize = DefaultRingSize
 	}
 	s := &Session{
-		size:     ringSize,
-		subs:     map[int]chan *dissect.Result{},
-		dis:      dissect.New(),
-		hist:     render.NewHistory(RenderChannels, render.DefaultWidth),
-		names:    namemap.New(0),
-		renderer: render.NewRenderer(),
-		rotStop:  make(chan struct{}),
+		size:         ringSize,
+		subs:         map[int]chan *dissect.Result{},
+		dis:          dissect.New(),
+		hist:         render.NewHistory(RenderChannels, render.DefaultWidth),
+		channelBytes: map[string]int64{},
+		names:        namemap.New(0),
+		renderer:     render.NewRenderer(),
+		rotStop:      make(chan struct{}),
 		// 2s of staleness is a deliberate trade: the /proc scans are far more
 		// expensive than the dissection they annotate, and socket ownership
 		// does not change meaningfully faster than that.
@@ -341,6 +370,8 @@ func (s *Session) startWith(src live.Source, iface string, snapLen int, filterTe
 	s.procCache = nil
 	s.filter = expr
 	s.names = namemap.New(0)
+	s.channelBytes = map[string]int64{}
+	s.report = nil
 	if s.sink != nil {
 		s.sink.Close()
 		s.sink = nil
@@ -406,6 +437,7 @@ func (s *Session) consume(packets <-chan live.Packet, done chan struct{}) {
 		}
 
 		s.mu.Lock()
+		s.channelBytes[renderChannel(res)] += int64(p.OrigLen)
 		s.ring = append(s.ring, res)
 		if len(s.ring) > s.size {
 			// Drop the oldest in one slice re-slice rather than shifting.
@@ -536,6 +568,39 @@ type Status struct {
 	// is history, not this second" is a different fact than F43's "this is
 	// the simulator standing in for a NIC we could not open."
 	Offline bool `json:"offline,omitempty"`
+}
+
+// SetReport stores the capture-report computed for the file currently open
+// (see Server.openFile) — a separate step from OpenFile itself because
+// analyze.Analyze reads the whole file up front to build its own aggregates
+// (talkers, conversations, credentials, ...) rather than consuming it
+// packet-by-packet the way the live dissect/consume path does.
+func (s *Session) SetReport(r *analyze.Report) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.report = r
+}
+
+// Report returns the current capture-report, or nil if none has been
+// computed yet (idle, or a live capture with no single file behind it).
+func (s *Session) Report() *analyze.Report {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.report
+}
+
+// ChannelTotals returns a copy of the current capture's bytes-per-channel
+// running total (see channelBytes' own comment on why this exists alongside
+// hist) — the protocol composition of the whole session, not a decaying
+// window of it.
+func (s *Session) ChannelTotals() map[string]int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]int64, len(s.channelBytes))
+	for k, v := range s.channelBytes {
+		out[k] = v
+	}
+	return out
 }
 
 func (s *Session) Status() Status {

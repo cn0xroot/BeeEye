@@ -4,7 +4,7 @@
 > 本文件与代码同步更新。需求编号对应 [program.md](program.md) §2.4；设计章节引用同一文档。
 > 英文版：[PROGRESS.en.md](PROGRESS.en.md) · 架构说明：[ARCHITECTURE.md](ARCHITECTURE.md)
 
-**最后更新**：2026-08-20
+**最后更新**：2026-08-21
 
 ## 状态口径
 
@@ -61,18 +61,18 @@
 
 | 编号 | 功能 | 状态 | 证据 / 缺口 |
 |---|---|---|---|
-| F1 | 设备发现与身份识别 | 🟡 | `internal/identity` 做 OUI + hostname 推断；内核态已上报 DHCP Option 55/60、mDNS、SSDP 原始报文，`internal/dissect/app.go` 已解析出指纹字段。**缺口**：未接入 Fingerbank 类指纹库做型号匹配（真实抓包下多数设备 OUI 未命中，类别显示 unknown） |
+| F1 | 设备发现与身份识别 | 🟡 | `internal/identity` 做 OUI + hostname 推断，现已扩展为 `Fingerprint`（DHCP option 55/60、HTTP User-Agent、SSDP `Server:` 头，`internal/livesource/pipeline.go` 的 `seeFingerprint` 打通了从解析层到 `Identify` 的整条链路，DHCP 用自带 `chaddr` 定位设备）。**缺口**：仍是手工建的小规模指纹表（比照现有 19 条 OUI 表的规模），不是 Fingerbank 完整数据库，覆盖率有限 |
 | F2 | 连接级流量统计 | 🟡 | 内核 `flows` LRU 流表 + 周期快照上报已实现；`internal/store` `connections` 表持久化，实时抓包数据在用 |
 | F3 | TLS 握手信息提取 | ✅ | SNI / ALPN / JA3 已实现（`internal/dissect/app.go`），JA3 稳定性有测试覆盖；分析器对真实流量端到端在用 |
 | F4 | 明文协议解析 | ✅ | MQTT / HTTP / SSDP / mDNS / DNS / DHCP / **CoAP**（RFC 7252 头部+token+Uri-Path/Uri-Query/Content-Format/Observe 等选项逐字段解析，`TestDissectCoAP` + 截断 fuzz 测试覆盖）均已实现 |
-| F5 | 设备分级监控策略 | 🟡 | 分级已下沉到内核态：门锁/摄像头逐流上报，其余走聚合快照（`bpf/BeeEye.bpf.c`）。**缺口**：分级依赖 eBPF 内核路径，当前 AF_PACKET 路径未用分级 |
+| F5 | 设备分级监控策略 | ✅ | 分级最早下沉到内核态（门锁/摄像头逐流上报，其余走聚合快照，`bpf/BeeEye.bpf.c`），现已在 AF_PACKET 路径同步实现：`internal/livesource/pipeline.go` 新流建立时对高敏感类别（`Sensitivity()==3`）立即上报连接事件，不再依赖 eBPF；`TestTieredDeviceFlowReportsImmediately`/`TestUntieredDeviceFlowOnlyAggregates` 覆盖 |
 | F6 | 异常检测规则引擎 | ✅ | `internal/detect`：威胁情报、信标、扇出、横向、DNS 异常、地域、非常规时段，实测产出 38 条风险事件 |
 | F7 | Web 可视化界面 | ✅ | 总览/设备/连接/按IP/按协议/DNS/告警 七个视图全部可用；实测逐页截图，页面报错为空。**新增**：告警列表新增"关联目标"列（目的 IP、域名、地理位置），`GET /api/events` 后端同步富化——之前 `detail.dst_ip` 只是埋在原始 JSON 里，现在是一等字段 |
 | F8 | 新设备接入告警 | ✅ | `device_registry.is_new` 记录未确认状态，UI 有"确认"按钮；实时抓包下新设备实测入库。eBPF 的 `EVT_NEWDEV` 路径独立可用 |
 | F16 | 多网卡可配置采集 | 🟡 | 接口名全部来自 `config/config.yaml`；`captureIface` 依次尝试 config 接口→默认路由网卡→any，config 与本机不符时自动落到真实网卡（F16 已在 AF_PACKET 路径生效） |
 | F17 | 采集流量来源接口标识 | 🟡 | `ifindex` 进入内核 flow_key 与每条事件；连接与设备记录携带来源接口名，实时抓包下在用 |
 | F18 | Web UI 中英文切换 | ✅ | 后端只返回枚举 key（category/event_type 从不返回本地化字符串），两个 UI 各自带 `locales/zh-CN` 与 `en-US`，顶栏 EN/中文 即时切换 |
-| F19 | Web UI 多主题配色 | 🟡 | 6 套主题 token 全部实现并可用（light 已改为米黄纸感、dark、tech-blue、warm-amber、forest-green、high-contrast）。**缺口**：顶栏开关按需求改为日/月两态，其余四套主题目前只能通过 `localStorage` 选中，UI 上不可达 |
+| F19 | Web UI 多主题配色 | ✅ | 9 套主题（system、light 米黄纸感、dark、midnight-neon、matrix、tech-blue、warm-amber、forest-green、high-contrast）全部实现并可用；顶栏日/月按钮是浅色/深色快捷切换，紧邻的齿轮图标菜单（`Settings.jsx`）以九宫格色块暴露全部主题，双语标签齐全，全部可从 UI 直接点选，无需手改 `localStorage` |
 | F21 | DNS 查询记录与域名映射 | ✅ | 解析器处理压缩指针与 A/AAAA/CNAME；`dns_records` 表 + `DomainForIP` 反查；分析器对真实流量实测解析出域名 |
 | F22 | 服务器 IP 地理位置标注 | ✅ | `internal/geoip/mmdb.go`：接入标准 MaxMind mmdb（`geoip2-golang`），自动发现 `./data/`、`/usr/share/GeoIP/`、Clash 的 `Country.mmdb`；有 City 库则解析国家/省/市，有 ASN 库则解析运营商，均全离线查询，实测本机 Clash 库正确识别 `114.114.114.114`→CN、`8.8.8.8`→country=GOOGLE（伪代码，非真实地理国家码）。新增 `GET /api/geoip/status` 暴露当前精度等级（`city`/`country`/`builtin`），总览 By-IP 页新增精度徽章（`GeoAccuracyBadge.jsx`）如实告知用户当前是否只有国家级粗糙定位。新增 `scripts/geoip-setup.sh`：引导下载 GeoLite2-City/ASN（需用户自备免费 MaxMind 账号），下载本身不算在线逐 IP 查询，下载完成后的每次查询仍 100% 本地（§3.9 隐私要求不受影响）。`TestGetStatusReflectsAccuracy`/`TestReadVersionStringOnRealLibraries`（后者见 F14）覆盖 |
 | F23 | 通信协议识别与展示 | ✅ | 按 §3.5.4 优先级链实现，识别不出时如实标注 unknown |
@@ -114,7 +114,7 @@
 | F15 主动 MITM（无差别，对全部设备） | ⬜ 未开始，且建议不做：对目标 IoT 设备无效，需在设备上装证书，与"无需在任何设备上装 agent"直接冲突 |
 | F45 手机端可选 MITM 解密（用户自愿，类 Surge/Burp/mitmproxy） | ✅ 新增 `internal/mitm`：本地生成根 CA（ECDSA P-256，私钥 0600 权限落盘不外传）、按 SNI 动态签发叶子证书（共用叶子私钥，只换证书）、HTTP CONNECT 代理终止客户端 TLS 后向真实源站发起**完全校验**的 TLS 转发（无 `InsecureSkipVerify`）。范围有意限定在 CONNECT/HTTPS，普通 HTTP 直接 400。API：`GET /api/mitm/status`、`GET /api/mitm/ca.pem`、`GET /api/mitm/ca.mobileconfig`（iOS 一键安装描述文件）、`GET /api/mitm/exchanges[/{id}]`（内存环形缓冲，重启清空，不落盘——本项目目前处理过最敏感的数据）。默认关闭（`mitm.enabled: false`），需显式打开并重启。**实测**（非模拟）：对真实网站 `https://example.com` 完整走一遍——受信任的 curl 拿到解密后的真实响应体，不信任该 CA 的 curl 被正确拒绝（fail-closed，非静默明文透传）；`.mobileconfig` 用 Python `plistlib` 验证是合法的 Apple 配置描述文件。四类单元测试（端到端解密、未信任客户端拒绝、明文 HTTP 拒绝、mobileconfig 内容校验）`-race` 通过。总览 UI 新增「证书与解密」页面（`BeeEye-web/src/components/Mitm.jsx`）：代理地址/证书指纹/已解密请求数三个数据块、PEM 与 `.mobileconfig` 两个下载按钮、五个平台的"装了证书还要手动做什么"对照表，中英文双语。**缺口**：走的是显式代理（CONNECT），不是透明重定向/iptables 下发，用户需要手动在设备上配置代理地址；解密后的请求/响应列表现已有前端面板（`Mitm.jsx` 新增「Decrypted requests」表格，点击一行展开请求头/响应头/响应体三块，body 按可打印字符显示、二进制字节渲染为 `·` 占位，避免二进制内容破坏面板）；**实测**（非模拟，真实开启 MITM 走一遍完整链路）：信任 CA 的 curl 通过代理访问 `https://example.com` 得到 HTTP 200，该请求实时出现在列表里，展开后能看到完整解密的响应体 `<!doctype html>...Example Domain...`、响应头（`Cf-Cache-Status: HIT`、`Server: cloudflare` 等）与请求头（`User-Agent: curl/8.12.1`）。仍是显式代理（CONNECT），非透明重定向。详见 [TLS-DECRYPT.md §5](TLS-DECRYPT.md)（含四个平台"装了证书之后还要手动信任"的差异表）。 |
 | F31 通信记录导出(CSV/JSON) | ✅ `GET /api/export?format=csv\|json`，CSV 带 UTF-8 BOM 以便 Excel 正确读取中文 |
-| F33 DNS 异常检测 | 🟡 NXDOMAIN 高频（疑似 DGA）已实现；DNS 隧道特征未实现 |
+| F33 DNS 异常检测 | ✅ NXDOMAIN 高频（疑似 DGA）已实现；DNS 隧道特征检测已实现——`model.DNSRecord` 新增 `QType`，`internal/detect.DNSTunnel` 检测 TXT/NULL 查询突增+查询名过长+高度集中于单一顶级域名，`TestDNSTunnelFlagsTXTBurstToOneDomain`/`TestDNSTunnelIgnoresOrdinaryBrowsing` 覆盖 |
 
 ---
 

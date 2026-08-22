@@ -1,7 +1,22 @@
 import { useTranslation } from 'react-i18next'
 import Settings from './Settings'
 
-const VIEWS = ['overview', 'devices', 'connections', 'byIp', 'byProtocol', 'dns', 'analysis', 'mitm', 'alerts']
+const VIEWS = ['overview', 'devices', 'connections', 'byIp', 'byProtocol', 'dns', 'mitm', 'alerts']
+
+// The analyzer (BeeEye-gui) is a second, independent process (F42) — its own
+// port, own frontend, no shared state with this one beyond whatever a file
+// opened there also gets POSTed into this app's own store (see
+// Analysis.jsx's former upload flow, now replaced by opening files directly
+// in the analyzer). There is no API this frontend can ask "what port is the
+// analyzer actually on", so this assumes the documented default (agent on
+// 8080, analyzer one port up on 8081 — see INSTALL.md / scripts/dev.sh) and
+// keeps the current page's own protocol and hostname, so it still works over
+// LAN, a custom hostname, or HTTPS behind a reverse proxy for the agent
+// itself, and just fails obviously as a normal broken link if the analyzer
+// isn't actually reachable there.
+function analyzerURL() {
+  return `${window.location.protocol}//${window.location.hostname}:8081`
+}
 
 // The two glyphs are inline SVG rather than an emoji or an icon font: ☀/🌙
 // render as someone else's colour picture on most platforms, and here the
@@ -66,6 +81,15 @@ export default function Header({ view, onView, theme, resolvedTheme, onTheme, fo
       </nav>
 
       <div className="header-controls">
+        <a
+          className="btn ghost tiny open-analyzer"
+          href={analyzerURL()}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {t('nav.openAnalyzer')}
+        </a>
+
         <div className="theme-switch" role="group" aria-label={t('settings.theme')}>
           {[
             ['light', SunIcon],
