@@ -44,6 +44,10 @@
   --proto-http:  #ff6a1f;
   --proto-dns:   #00d992;
   --proto-mqtt:  #ffc31a;
+  --proto-sip:   #bcff26;
+  --proto-sctp:  #19f0ff;
+  --proto-gtp:   #2637ff;
+  --proto-sim:   #fa33ff;
   --proto-arp:   #ff4d9d;
   --proto-icmp:  #5ef04a;
   --proto-tcp:   #ab72ff;
@@ -131,6 +135,10 @@ button, input, select {
   --proto-http:  #c9521c;
   --proto-dns:   #12805a;
   --proto-mqtt:  #9a6a00;
+  --proto-sip:   #84b21b;
+  --proto-sctp:  #12a8b2;
+  --proto-gtp:   #1b25b2;
+  --proto-sim:   #af24b2;
   --proto-arp:   #c14b7c;
   --proto-icmp:  #006b00;
   --proto-tcp:   #4a3aa7;
@@ -330,6 +338,10 @@ button, input, select {
   --proto-http:  #ff6a3d;
   --proto-dns:   #00e5a0;
   --proto-mqtt:  #ffcf33;
+  --proto-sip:   #bcff26;
+  --proto-sctp:  #19f0ff;
+  --proto-gtp:   #2635ff;
+  --proto-sim:   #fa33ff;
   --proto-arp:   #ff5db1;
   --proto-icmp:  #7cff5e;
   --proto-tcp:   #b98cff;
@@ -375,6 +387,10 @@ button, input, select {
   --proto-http:  #b6ff3f;
   --proto-dns:   #3fffd2;
   --proto-mqtt:  #d4ff3f;
+  --proto-sip:   #ffe359;
+  --proto-sctp:  #59ffff;
+  --proto-gtp:   #59d6ff;
+  --proto-sim:   #f1ff59;
   --proto-arp:   #7cff9e;
   --proto-icmp:  #4dff4d;
   --proto-tcp:   #a0ff6e;

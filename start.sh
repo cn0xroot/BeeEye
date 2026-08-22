@@ -6,9 +6,16 @@
 #
 #   ./start.sh              build what is stale, start both services
 #   ./start.sh --dev        …and run the two Vite dev servers with HMR
+#   ./start.sh --desktop    …and also (re)build + launch BeeEye-desktop
+#   ./start.sh --rebuild    force every build step, ignore staleness checks
 #   ./start.sh stop         stop everything this script started
 #   ./start.sh status       what is running
 #   ./start.sh logs         follow every log
+#
+# BeeEye-desktop's own release binary is rebuilt whenever stale as part of
+# the normal build step regardless of --desktop — that flag only decides
+# whether it is then launched, since opening a window needs a display this
+# script cannot assume it has.
 #
 # Service supervision itself lives in scripts/dev.sh — this script is the
 # layer above it: preflight, build, then delegate. Two places that both know
@@ -28,6 +35,7 @@ GUI_DEV_PORT="${GUI_DEV_PORT:-5174}"
 DEV_MODE=0
 FORCE_REBUILD=0
 SKIP_BUILD=0
+DESKTOP_LAUNCH=0
 CMD=start
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -52,6 +60,11 @@ options:
   --no-build        start whatever is already built, build nothing
   --iface NAME      capture interface for the analyzer (default: auto)
   --setcap          grant capture capabilities to the binaries (uses sudo)
+  --desktop         also launch BeeEye-desktop (the native window shell)
+                    after starting the backends — its own release binary is
+                    always rebuilt when stale as part of the normal build
+                    step, same as everything else; this flag only controls
+                    whether it is then opened
   -h, --help        this text
 USAGE
 }
@@ -64,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --no-build)  SKIP_BUILD=1 ;;
     --iface)     shift; export IFACE="${1:?--iface needs an interface name}" ;;
     --setcap)    CMD=setcap ;;
+    --desktop)   DESKTOP_LAUNCH=1 ;;
     -h|--help)   usage; exit 0 ;;
     *) usage >&2; die "unknown argument: $1" ;;
   esac
@@ -169,6 +183,31 @@ build_frontend() {
   fi
 }
 
+# BeeEye-desktop (scripts/build-deb.sh's own doc comment explains what it is:
+# a thin Tauri window shell, no frontend/backend code of its own) is optional
+# on purpose — it needs a Rust toolchain this project otherwise never
+# requires, and a machine with no `cargo` should still get a fully working
+# ./start.sh. Rebuilt whenever stale as part of the ordinary build step
+# (same "stale wins, skip otherwise" rule as build_backend/build_frontend);
+# --desktop only controls whether it is launched afterward, not whether it
+# is built — "rebuild everything" and "open a window" are different asks,
+# and the latter needs a display this script cannot assume it has.
+DESKTOP_BIN="$ROOT/BeeEye-desktop/src-tauri/target/release/BeeEye-desktop"
+build_desktop() {
+  command -v cargo >/dev/null || { dim "· skipping BeeEye-desktop (no cargo — install Rust to build it: https://rustup.rs)"; return 0; }
+  local src="$ROOT/BeeEye-desktop/src-tauri"
+  if (( FORCE_REBUILD )) || [[ ! -x "$DESKTOP_BIN" ]] \
+     || stale "$src/src" "$DESKTOP_BIN" \
+     || [[ "$src/Cargo.toml" -nt "$DESKTOP_BIN" ]] \
+     || [[ "$src/Cargo.lock" -nt "$DESKTOP_BIN" ]] \
+     || [[ "$src/tauri.conf.json" -nt "$DESKTOP_BIN" ]]; then
+    bold "· building BeeEye-desktop"
+    (cd "$src" && cargo build --release --quiet)
+  else
+    dim  "· BeeEye-desktop up to date"
+  fi
+}
+
 # ----------------------------------------------------------------- dev servers
 
 # The Vite servers are only started with --dev. They proxy /api to the two Go
@@ -209,6 +248,33 @@ stop_dev_servers() {
   done
 }
 
+# start_desktop/stop_desktop follow the exact same pidfile convention as the
+# dev servers above, for the same reason: only a process this script itself
+# started should ever be killed by ./start.sh stop, never a window the user
+# opened by hand (e.g. double-clicking the installed .deb's launcher entry).
+start_desktop() {
+  [[ -x "$DESKTOP_BIN" ]] || { warn "  BeeEye-desktop was not built (no cargo?) — skipping launch"; return 0; }
+  local pidfile="$RUN_DIR/desktop.pid"
+  if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    echo "  desktop already running (pid $(cat "$pidfile"))"
+    return 0
+  fi
+  setsid "$DESKTOP_BIN" > "$RUN_DIR/desktop.log" 2>&1 &
+  echo $! > "$pidfile"
+  echo "  desktop started (pid $!) → $RUN_DIR/desktop.log"
+}
+
+stop_desktop() {
+  local pidfile="$RUN_DIR/desktop.pid"
+  [[ -f "$pidfile" ]] || return 0
+  local pid; pid=$(cat "$pidfile")
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -- "-$(ps -o pgid= "$pid" | tr -d ' ')" 2>/dev/null || kill "$pid" 2>/dev/null || true
+    echo "  desktop stopped"
+  fi
+  rm -f "$pidfile"
+}
+
 # --------------------------------------------------------------------- health
 
 wait_healthy() {
@@ -242,6 +308,7 @@ cmd_start() {
     build_backend
     build_frontend "$ROOT/BeeEye-web" "overview UI"
     build_frontend "$ROOT/BeeEye-gui" "analyzer UI"
+    build_desktop
   fi
 
   echo
@@ -262,10 +329,17 @@ cmd_start() {
     echo "  overview UI (HMR) : http://localhost:$WEB_DEV_PORT"
     echo "  analyzer UI (HMR) : http://localhost:$GUI_DEV_PORT"
   fi
+
+  if (( DESKTOP_LAUNCH )); then
+    echo
+    bold "starting BeeEye-desktop…"
+    start_desktop
+  fi
 }
 
 cmd_stop() {
   stop_dev_servers
+  stop_desktop
   ./scripts/dev.sh stop
 }
 
@@ -279,7 +353,11 @@ case "$CMD" in
              if [[ -f "$p" ]] && kill -0 "$(cat "$p")" 2>/dev/null; then
                echo "  $name dev server: running (pid $(cat "$p"))"
              fi
-           done ;;
+           done
+           p="$RUN_DIR/desktop.pid"
+           if [[ -f "$p" ]] && kill -0 "$(cat "$p")" 2>/dev/null; then
+             echo "  desktop: running (pid $(cat "$p"))"
+           fi ;;
   logs)    tail -f "$RUN_DIR"/*.log ;;
   setcap)  cmd_setcap ;;
 esac

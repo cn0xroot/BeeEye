@@ -209,10 +209,10 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
 .card-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 
 .iface-card { background: #0b0f1a; border-color: #1c2536; }
-.iface-stats { display: flex; flex-wrap: wrap; gap: 6px 22px; font-family: var(--mono, ui-monospace, 'SF Mono', Menlo, Consolas, monospace); }
-.iface-stat { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; white-space: nowrap; }
-.iface-stat-label { opacity: 0.75; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
-.iface-stat-value { font-weight: 700; text-shadow: 0 0 10px currentColor; }
+.iface-stats { display: flex; flex-wrap: wrap; gap: 10px 26px; font-family: var(--mono, ui-monospace, 'SF Mono', Menlo, Consolas, monospace); }
+.iface-stat { display: inline-flex; align-items: baseline; gap: 8px; font-size: 15px; white-space: nowrap; }
+.iface-stat-label { opacity: 0.75; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+.iface-stat-value { font-size: 18px; font-weight: 700; text-shadow: 0 0 10px currentColor; }
 
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
 .tile {
@@ -245,22 +245,39 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
 .ttl-tx { background: #ffc83d; } /* matches api.js's ttc-line-tx / TxRxBar's amber */
 .ttl-rx { background: #2e9dff; } /* matches ttc-line-rx / TxRxBar's blue */
 .ttl-backend { margin-left: auto; font-size: 10px; color: var(--text-faint); }
+.ttl-backend.gpu { color: var(--accent); }
 
 /* Same box the world map uses (aspect-ratio: 2/1) — the user asked for the
    two panels to read as one consistent pair of "wide chart" cards, not one
    short and one tall for no reason. */
+.traffic-trend-plot {
+  position: relative; border-radius: 8px; overflow: hidden;
+  background: var(--bg); border: 1px solid var(--border);
+}
+/* The GPU/CPU-rendered frame sits behind the SVG, stretched to fill the same
+   box and blended so it reads as ambient heat rather than a picture in its
+   own right — screen/lighten-style blending, low opacity, never the only
+   place a number lives (that's still the SVG on top of it). */
+.traffic-trend-glow {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; opacity: 0.55; mix-blend-mode: screen;
+  pointer-events: none;
+}
 .traffic-trend-svg {
-  display: block; width: 100%; aspect-ratio: 2 / 1; max-height: 720px; min-height: 320px;
-  border-radius: 8px; background: var(--bg); border: 1px solid var(--border);
+  position: relative; display: block; width: 100%; aspect-ratio: 2 / 1; max-height: 720px; min-height: 320px;
+  background: transparent;
 }
 .ttc-grid line { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.ttc-grid text { font-size: 15px; fill: var(--text-faint); font-family: inherit; }
+.ttc-grid text { font-size: 15px; fill: var(--text-faint); font-family: inherit; font-variant-numeric: tabular-nums; }
 .ttc-baseline { stroke: var(--text-faint); stroke-width: 1.5; vector-effect: non-scaling-stroke; opacity: 0.5; }
-.ttc-area-tx { fill: #ffc83d; opacity: 0.28; }
-.ttc-area-rx { fill: #2e9dff; opacity: 0.28; }
-.ttc-line { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
-.ttc-line-tx { stroke: #ffc83d; }
-.ttc-line-rx { stroke: #2e9dff; }
+/* Gradients (defined in TrafficTrendChart.jsx's <defs>) replace what used to
+   be a flat, uniform-opacity fill — fading toward the baseline reads as
+   volume tapering off instead of a flat block with a hard-edged top. */
+.ttc-area-tx { fill: url(#ttcGradTx); }
+.ttc-area-rx { fill: url(#ttcGradRx); }
+.ttc-line { fill: none; stroke-width: 2.25; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+.ttc-line-tx { stroke: #ffc83d; filter: drop-shadow(0 0 3px rgba(255, 200, 61, 0.55)); }
+.ttc-line-rx { stroke: #2e9dff; filter: drop-shadow(0 0 3px rgba(46, 157, 255, 0.55)); }
 .traffic-trend-xaxis {
   display: flex; justify-content: space-between; font-size: 11px;
   color: var(--text-faint); margin-top: 4px; padding-right: 4px;
@@ -507,6 +524,7 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
   border-radius: 8px;
   background: var(--bg);
   border: 1px solid var(--border);
+  cursor: pointer;
 }
 .worldmap-note {
   position: absolute; left: 10px; bottom: 8px;
@@ -521,11 +539,19 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
   padding: 8px 10px; font-size: 12px; line-height: 1.5;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
+.worldmap-tooltip.pinned { border-color: var(--accent); }
 .worldmap-tooltip .wt-row { display: flex; gap: 6px; }
 .worldmap-tooltip .wt-label { color: var(--text-faint); min-width: 32px; flex: none; }
 .worldmap-tooltip .wt-domain { margin-top: 3px; font-weight: 600; word-break: break-all; }
 .worldmap-tooltip .wt-ip { font-size: 10.5px; margin-top: 2px; }
 .worldmap-fallback { padding: 40px; text-align: center; color: var(--text-faint); }
+.worldmap-empty {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  max-width: 70%; text-align: center; font-size: 12px; line-height: 1.5;
+  color: var(--text-faint); pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  padding: 10px 16px; border-radius: 8px;
+}
 
 /* ── MITM decrypted request list (F45) ─────────────────────────────── */
 .mitm-exchanges .ex-row { cursor: pointer; }

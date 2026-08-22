@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS dns_records (
     resolved_ips TEXT,
     ttl          INTEGER,
     rcode        TEXT,
+    qtype        TEXT,
     encrypted    INTEGER,
     iface        TEXT
 );
@@ -124,6 +125,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE connections ADD COLUMN tx_bytes INTEGER DEFAULT 0`,
 		`ALTER TABLE connections ADD COLUMN rx_bytes INTEGER DEFAULT 0`,
 		`ALTER TABLE dns_records ADD COLUMN iface TEXT`,
+		`ALTER TABLE dns_records ADD COLUMN qtype TEXT`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
@@ -383,9 +385,9 @@ func (s *Store) InsertDNS(r *model.DNSRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ips, _ := json.Marshal(r.ResolvedIPs)
-	_, err := s.db.Exec(`INSERT INTO dns_records (ts,mac,domain,resolved_ips,ttl,rcode,encrypted,iface)
-        VALUES (?,?,?,?,?,?,?,?)`,
-		r.TS.Unix(), r.MAC, r.Domain, string(ips), r.TTL, r.RCode, b2i(r.Encrypted), r.Iface)
+	_, err := s.db.Exec(`INSERT INTO dns_records (ts,mac,domain,resolved_ips,ttl,rcode,qtype,encrypted,iface)
+        VALUES (?,?,?,?,?,?,?,?,?)`,
+		r.TS.Unix(), r.MAC, r.Domain, string(ips), r.TTL, r.RCode, r.QType, b2i(r.Encrypted), r.Iface)
 	return err
 }
 
@@ -410,7 +412,7 @@ func (s *Store) dnsRecords(mac, iface string, limit int) ([]model.DNSRecord, err
 	if limit <= 0 {
 		limit = 500
 	}
-	q := `SELECT id,ts,mac,domain,resolved_ips,ttl,rcode,encrypted,iface FROM dns_records WHERE 1=1`
+	q := `SELECT id,ts,mac,domain,resolved_ips,ttl,rcode,qtype,encrypted,iface FROM dns_records WHERE 1=1`
 	args := []any{}
 	if mac != "" {
 		q += ` AND mac=?`
@@ -433,12 +435,13 @@ func (s *Store) dnsRecords(mac, iface string, limit int) ([]model.DNSRecord, err
 		var ts int64
 		var ips string
 		var enc int
-		var ifaceVal sql.NullString
-		if err := rows.Scan(&r.ID, &ts, &r.MAC, &r.Domain, &ips, &r.TTL, &r.RCode, &enc, &ifaceVal); err != nil {
+		var qtypeVal, ifaceVal sql.NullString
+		if err := rows.Scan(&r.ID, &ts, &r.MAC, &r.Domain, &ips, &r.TTL, &r.RCode, &qtypeVal, &enc, &ifaceVal); err != nil {
 			return nil, err
 		}
 		r.TS = time.Unix(ts, 0)
 		_ = json.Unmarshal([]byte(ips), &r.ResolvedIPs)
+		r.QType = qtypeVal.String
 		r.Encrypted = enc == 1
 		r.Iface = ifaceVal.String
 		out = append(out, r)

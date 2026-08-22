@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { api, streamPackets } from './api'
 import Toolbar from './components/Toolbar'
 import TrafficField from './components/TrafficField'
+import Report from './components/Report'
 import PacketList from './components/PacketList'
 import FieldTree from './components/FieldTree'
 import HexDump from './components/HexDump'
@@ -42,6 +43,7 @@ export default function App() {
   const [font, setFont] = useFont()
   const [size, setSize] = useSize()
   const [status, setStatus] = useState(null)
+  const [mainView, setMainView] = useState('packets') // 'packets' | 'report'
   const [interfaces, setInterfaces] = useState([])
   const [packets, setPackets] = useState([])
   const [selected, setSelected] = useState(null)
@@ -241,9 +243,20 @@ export default function App() {
         onSize={setSize}
       />
 
-      <TrafficField running={!!status?.running} />
+      <TrafficField running={!!status?.running} offline={!!status?.offline} />
 
-      <main className="panes">
+      <div className="main-tabs" role="tablist">
+        <button role="tab" aria-selected={mainView === 'packets'} className={mainView === 'packets' ? 'active' : ''} onClick={() => setMainView('packets')}>
+          {t('panes.packets')}
+        </button>
+        <button role="tab" aria-selected={mainView === 'report'} className={mainView === 'report' ? 'active' : ''} onClick={() => setMainView('report')}>
+          {t('panes.report')}
+        </button>
+      </div>
+
+      {mainView === 'report' && <ErrorBoundary label="Report"><Report /></ErrorBoundary>}
+
+      <main className="panes" style={mainView === 'report' ? { display: 'none' } : undefined}>
         <PacketList
           packets={packets}
           selected={selected}

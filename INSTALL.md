@@ -87,7 +87,7 @@ have it by default).
 ## 3. Clone and build
 
 ```bash
-git clone <repo-url> BeeEye
+git clone https://github.com/cn0xroot/BeeEye.git BeeEye
 cd BeeEye
 
 # One command: preflight → generate vmlinux.h → compile eBPF → build both

@@ -306,6 +306,11 @@ export default function WorldMap({ iface } = {}) {
   const [count, setCount] = useState(0)
   const [err, setErr] = useState(false)
   const [tip, setTip] = useState(null) // { x, y, point } in canvas-local pixels, or null
+  // Whether tip came from a click rather than a hover: a click "pins" the
+  // panel open (survives the pointer leaving the canvas, e.g. moving to
+  // read the IP) until the user clicks again — plain hover keeps the old
+  // follow-the-mouse behavior for desktop users who just want a quick peek.
+  const [pinned, setPinned] = useState(false)
 
   // Same clip-space math as VERT_POINT/the Canvas2D fallback, inverted back
   // to pixels for hit-testing — kept in one place so a hover always lands on
@@ -315,20 +320,33 @@ export default function WorldMap({ iface } = {}) {
     return [(cx + 1) / 2 * w, (1 - cy) / 2 * h]
   }
 
-  const handlePointerMove = (e) => {
+  // Shared by hover and click: finds the destination point nearest the
+  // event, in canvas-local pixels, or null if nothing is close enough.
+  const hitTest = (e) => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return null
     const rect = canvas.getBoundingClientRect()
     const mx = e.clientX - rect.left
     const my = e.clientY - rect.top
     const w = canvas.clientWidth, h = canvas.clientHeight
-    let best = null, bestD = 14 // px — a generous hit radius, points render small
+    let best = null, bestD = 16 // px — a generous hit radius, points render small
     for (const p of stateRef.current.points.values()) {
       const [sx, sy] = toScreen(p.lat, p.lon, w, h)
       const d = Math.hypot(sx - mx, sy - my)
       if (d < bestD) { bestD = d; best = p }
     }
-    setTip(best ? { x: mx, y: my, point: best } : null)
+    return best ? { x: mx, y: my, point: best } : null
+  }
+
+  const handlePointerMove = (e) => {
+    if (pinned) return // a click pinned the panel; hovering elsewhere must not steal it
+    setTip(hitTest(e))
+  }
+
+  const handleClick = (e) => {
+    const hit = hitTest(e)
+    setTip(hit)
+    setPinned(!!hit) // clicking empty space unpins and clears, same as a miss
   }
 
   // --- GL setup ---
@@ -543,6 +561,10 @@ export default function WorldMap({ iface } = {}) {
             // out" case where the source has no meaningful geo of its own).
             dstIp: r.dst_ip, country: r.country, region: r.region, city: r.city, domain: r.domain,
             srcIp: r.src_ip, srcCountry: r.src_country, srcRegion: r.src_region, srcCity: r.src_city,
+            // Network operator (F22's ASN tier) — blank/0 rather than guessed
+            // when only a Country-tier or no ASN database is loaded, same
+            // honesty policy as the rest of this object.
+            isp: r.isp, asn: r.asn,
           })
           // Fire a pulse for every poll that still sees traffic to this
           // destination, not only the first time it is ever seen — a live
@@ -600,12 +622,21 @@ export default function WorldMap({ iface } = {}) {
           ref={canvasRef}
           className="worldmap-canvas"
           onMouseMove={handlePointerMove}
-          onMouseLeave={() => setTip(null)}
+          onMouseLeave={() => { if (!pinned) setTip(null) }}
+          onClick={handleClick}
         />
-        <div className="worldmap-note">{t('map.anchorNote')}</div>
+        <div className="worldmap-note">{t('map.anchorNote')} · {t('map.tooltipHint')}</div>
+        {/* "0 destinations" is frequently the honest, correct answer — a
+            scoped-to-import capture whose traffic never left the local
+            loopback (GSMTAP/SIM-reader captures, for instance) or a live
+            capture polled before any external traffic has happened yet —
+            not a broken map. Saying so beats leaving an unexplained blank
+            canvas that reads as "this doesn't work" (same principle as
+            GeoAccuracyBadge and F43's real/simulated labeling elsewhere). */}
+        {count === 0 && <div className="worldmap-empty">{t('map.empty')}</div>}
         {tip && (
           <div
-            className="worldmap-tooltip"
+            className={`worldmap-tooltip${pinned ? ' pinned' : ''}`}
             style={{ left: Math.min(tip.x + 14, (canvasRef.current?.clientWidth || 0) - 210), top: tip.y + 14 }}
           >
             {tip.point.srcCountry && (
@@ -620,6 +651,16 @@ export default function WorldMap({ iface } = {}) {
             </div>
             {tip.point.domain && <div className="wt-domain">{tip.point.domain}</div>}
             <div className="wt-ip dim">{tip.point.dstIp}</div>
+            {tip.point.isp && (
+              <div className="wt-row">
+                <span className="wt-label">{t('map.tooltipIsp')}</span>
+                <span>{tip.point.isp}{tip.point.asn ? ` (AS${tip.point.asn})` : ''}</span>
+              </div>
+            )}
+            <div className="wt-row">
+              <span className="wt-label">{t('map.tooltipCoords')}</span>
+              <span>{formatCoords(tip.point.lat, tip.point.lon)}</span>
+            </div>
           </div>
         )}
       </div>
@@ -632,4 +673,13 @@ export default function WorldMap({ iface } = {}) {
 // this shows exactly what is known rather than padding with placeholders.
 function formatGeo(country, region, city) {
   return [country, region, city].filter(Boolean).join(' · ') || '—'
+}
+
+// formatCoords renders the destination's own lat/lon (never the anchor's —
+// see ANCHOR's comment) as signed degrees, e.g. "37.75°N, 122.42°W".
+function formatCoords(lat, lon) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return '—'
+  const ns = lat >= 0 ? 'N' : 'S'
+  const ew = lon >= 0 ? 'E' : 'W'
+  return `${Math.abs(lat).toFixed(2)}°${ns}, ${Math.abs(lon).toFixed(2)}°${ew}`
 }

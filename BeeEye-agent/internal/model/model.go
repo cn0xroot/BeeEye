@@ -88,9 +88,16 @@ type DNSRecord struct {
 	Domain      string    `json:"domain"`
 	ResolvedIPs []string  `json:"resolved_ips"`
 	TTL         int       `json:"ttl"`
-	RCode       string    `json:"rcode"`     // NOERROR / NXDOMAIN — feeds DNS anomaly (F33)
-	Encrypted   bool      `json:"encrypted"` // DoH/DoT: content not visible (F21 note)
-	Iface       string    `json:"iface"`     // source interface name, or an imported file's name (F17)
+	RCode       string    `json:"rcode"` // NOERROR / NXDOMAIN — feeds DNS anomaly (F33)
+	// QType is the record type — A/AAAA/TXT/NULL/CNAME/... — parsed by
+	// internal/dissect for the packet-detail tree but, before this, never
+	// carried past it. DNS tunneling shows up disproportionately as TXT/NULL
+	// queries (a covert channel needs a record type that can carry an
+	// arbitrary payload, which A/AAAA cannot), so this is what makes that
+	// distinguishable from ordinary lookups (F33's gap).
+	QType     string `json:"qtype,omitempty"`
+	Encrypted bool   `json:"encrypted"` // DoH/DoT: content not visible (F21 note)
+	Iface     string `json:"iface"`     // source interface name, or an imported file's name (F17)
 }
 
 // Severity for events / alerts.

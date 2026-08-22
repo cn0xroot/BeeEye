@@ -268,3 +268,50 @@ func TestCurveBackendsAgree(t *testing.T) {
 	}
 	t.Logf("cuda device %q, worst channel delta %v, mean %.5f", gpu.Device(), worst, mean)
 }
+
+// TestBarsBackendsAgree is TestBackendsAgree's counterpart for RenderBars —
+// same skip-unless-cuda guard, same job of catching the kernel and the Go
+// fallback drifting apart.
+func TestBarsBackendsAgree(t *testing.T) {
+	gpu := NewRenderer()
+	if gpu.Name() != "cuda" {
+		t.Skip("not built with -tags cuda, or no CUDA device present")
+	}
+	defer gpu.Close()
+
+	const count, w, h = 8, 256, 128
+	values := make([]float32, count)
+	for i := range values {
+		// A descending ranked bar chart, the shape this is actually used for
+		// (top talkers / protocol share sorted by size), plus one zero-length
+		// row to exercise the "nothing past x=0" edge.
+		values[i] = clamp01(1 - float32(i)/float32(count))
+	}
+	values[count-1] = 0
+	colors := ChannelRGB(count)
+	hot := [3]float32{1.0, 0.976, 0.929}
+	base := [3]float32{0.043, 0.062, 0.118}
+	gpuOut := make([]byte, w*h*4)
+	cpuOut := make([]byte, w*h*4)
+
+	if err := gpu.RenderBars(values, colors, count, w, h, hot, base, gpuOut); err != nil {
+		t.Fatalf("cuda render: %v", err)
+	}
+	if err := NewCPURenderer().RenderBars(values, colors, count, w, h, hot, base, cpuOut); err != nil {
+		t.Fatalf("cpu render: %v", err)
+	}
+
+	var worst, total float64
+	for i := range gpuOut {
+		d := math.Abs(float64(gpuOut[i]) - float64(cpuOut[i]))
+		total += d
+		if d > worst {
+			worst = d
+		}
+	}
+	mean := total / float64(len(gpuOut))
+	if worst > 3 {
+		t.Errorf("worst per-channel difference %v (mean %.4f) — the kernels have diverged", worst, mean)
+	}
+	t.Logf("cuda device %q, worst channel delta %v, mean %.5f", gpu.Device(), worst, mean)
+}

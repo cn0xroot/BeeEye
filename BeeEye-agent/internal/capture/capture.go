@@ -73,7 +73,7 @@ func GenerateSimulated(st *store.Store, seed int64) (*Scenario, error) {
 	byMAC := map[string]dev{}
 	for _, d := range devices {
 		byMAC[d.mac] = d
-		info := identity.Identify(d.mac, d.host)
+		info := identity.Identify(d.mac, d.host, identity.Fingerprint{})
 		firstSeen := start
 		if d.host == "alice-iphone" {
 			firstSeen = now.Add(-4 * time.Minute) // NEW device → F8 alert

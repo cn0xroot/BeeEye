@@ -425,6 +425,12 @@ type GeoPair struct {
 	// report, and this stays honestly blank rather than guessing.
 	Region string `json:"region,omitempty"`
 	City   string `json:"city"`
+	// ISP/ASN are the destination's network operator (F22's ASN-tier data:
+	// "China Telecom", "GOOGLE", ...) — only non-empty/non-zero when an ASN
+	// GeoIP database is loaded (geoip.Status.HasASN), same honesty policy as
+	// Region above.
+	ISP    string `json:"isp,omitempty"`
+	ASN    uint   `json:"asn,omitempty"`
 	Domain string `json:"domain"`
 	Proto  string `json:"proto"`
 	Bytes  int64  `json:"bytes"`
@@ -490,6 +496,7 @@ func (s *Server) geoPairs(w http.ResponseWriter, r *http.Request) {
 		}
 		gp := GeoPair{
 			DstIP: c.DstIP, Lat: geo.Lat, Lon: geo.Lon, Country: geo.Country, Region: geo.Region, City: geo.City,
+			ISP: geo.ISP, ASN: geo.ASN,
 			Proto: firstNonEmpty(c.AppProtocol, c.Proto), Bytes: c.Bytes,
 			TxBytes: c.TxBytes, RxBytes: c.RxBytes, TS: c.TS,
 		}

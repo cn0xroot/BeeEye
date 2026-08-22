@@ -60,12 +60,12 @@
 </head>
 <body>
   <div class="tabbar">
-    <div class="tab active" data-target="overview">🐝 总览 Overview</div>
-    <div class="tab" data-target="analyzer">📊 分析器 Analyzer</div>
+    <div class="tab active" data-target="analyzer">📊 分析器 Analyzer</div>
+    <div class="tab" data-target="overview">🐝 总览 Overview</div>
   </div>
   <div class="panes">
-    <div class="pane active" id="pane-overview"></div>
-    <div class="pane" id="pane-analyzer"></div>
+    <div class="pane active" id="pane-analyzer"></div>
+    <div class="pane" id="pane-overview"></div>
   </div>
 <script>
   const TARGETS = {
@@ -123,7 +123,7 @@
     });
   });
 
-  probe('overview');
+  probe('analyzer');
 </script>
 </body>
 </html>

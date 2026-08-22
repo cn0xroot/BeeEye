@@ -53,7 +53,96 @@
     "packets": "Packet list",
     "detail": "Packet detail",
     "bytes": "Bytes",
-    "field": "Traffic field"
+    "field": "Traffic field",
+    "report": "Report"
+  },
+  "report": {
+    "none": "No report yet — open a .pcap file (Toolbar's \"Open file\") to see its summary, protocols, talkers and more here.",
+    "warnings": "Limitations of this report",
+    "tabs": {
+      "summary": "Summary",
+      "protocols": "Protocols",
+      "talkers": "Talkers",
+      "conversations": "Conversations",
+      "sessions": "Sessions",
+      "credentials": "Credentials",
+      "files": "Files",
+      "findings": "Security",
+      "geo": "Geography"
+    },
+    "summary": {
+      "packets": "Packets",
+      "bytes": "Bytes",
+      "duration": "Duration",
+      "linkType": "Link type",
+      "uniqueIps": "Unique IPs",
+      "uniqueMacs": "Unique MACs",
+      "first": "First packet",
+      "last": "Last packet",
+      "snaplen": "Snapshot length"
+    },
+    "chartByBytes": "Ranked by bytes, GPU-rendered ({{backend}})",
+    "talkers": {
+      "ip": "IP",
+      "packets": "Packets",
+      "bytes": "Bytes",
+      "sent": "Sent",
+      "received": "Received",
+      "location": "Location"
+    },
+    "conv": {
+      "a": "Endpoint A",
+      "b": "Endpoint B",
+      "proto": "Transport",
+      "app": "Application",
+      "packets": "Packets",
+      "bytes": "Bytes"
+    },
+    "sessions": {
+      "client": "Client",
+      "server": "Server",
+      "app": "Application",
+      "bytes": "Bytes",
+      "request": "Client → server",
+      "response": "Server → client",
+      "authFailures": "Auth failures"
+    },
+    "creds": {
+      "protocol": "Protocol",
+      "method": "How",
+      "client": "Client",
+      "server": "Server",
+      "username": "Username",
+      "password": "Password",
+      "evidence": "Evidence",
+      "none": "No plaintext credentials found",
+      "warning": "These credentials crossed the network in plaintext. Anyone who could see this traffic could read them. Treat every one of them as compromised and change it."
+    },
+    "files": {
+      "filename": "Filename",
+      "type": "Content type",
+      "size": "Size",
+      "hash": "SHA-256",
+      "download": "Download",
+      "none": "No files reconstructed",
+      "warningTitle": "Downloaded files may be malicious",
+      "warning": "These bytes were carved out of captured traffic. Anything downloaded here is served as an opaque attachment and is never rendered — treat it as untrusted."
+    },
+    "findings": {
+      "kind": "Type",
+      "severity": "Severity",
+      "client": "Source",
+      "server": "Target",
+      "evidence": "Evidence",
+      "none": "No security findings",
+      "heuristic": "Heuristic — a pattern match, not proof that an attack succeeded"
+    },
+    "geo": {
+      "none": "No external destinations with a known location",
+      "country": "Country",
+      "city": "City",
+      "bytes": "Bytes"
+    }
   },
   "columns": {
     "no": "No.",

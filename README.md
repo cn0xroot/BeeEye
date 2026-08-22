@@ -255,7 +255,7 @@ BeeEye doesn't stand alone — its design leans directly on a few projects, and 
 
 - **[Wireshark](https://www.wireshark.org/)** — the three-pane packet list / protocol field tree / hex dump layout, the display-filter grammar `internal/dfilter` implements a compatible subset of, and JA3/TLS field naming conventions all follow Wireshark's, deliberately, so the muscle memory transfers.
 - **[eCapture](https://github.com/gojue/ecapture)** — the uprobe-based TLS plaintext capture design `BeeEye-tlspeek` (F14) follows the same shape eCapture pioneered (attach to a crypto library's read/write functions, no MITM, no cert on the target). Its module list is also the roadmap for BeeEye's own gaps: GoTLS, GnuTLS and NSS coverage, and combined pcap+keylog export are still open here (see [PROGRESS.en.md](PROGRESS.en.md) F14/F45) precisely because eCapture already proved each one is buildable. See [TLS-DECRYPT.md](TLS-DECRYPT.md) for where the two projects' scopes diverge (gateway-local only, here, on purpose).
-- **[Pcap-Analyzer](https://github.com/HatBoy/Pcap-Analyzer)** — the shape of the offline-analysis view (protocol/talker/conversation stats, credential extraction, file carving, attack-pattern heuristics) that both `internal/analyze` and the overview UI's "Analysis" tab follow.
+- **[Pcap-Analyzer](https://github.com/HatBoy/Pcap-Analyzer)** — the shape of the offline-analysis view (protocol/talker/conversation stats, credential extraction, file carving, attack-pattern heuristics) that both `internal/analyze` and the analyzer's "Report" tab follow — the protocols/talkers/conversations panels go a step further with a GPU-rendered bar chart sharing the field's own glow/bloom palette, rather than plain tables.
 
 **Open-source libraries this code runs on**
 

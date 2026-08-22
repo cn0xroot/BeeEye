@@ -79,7 +79,11 @@ export const api = {
 
 export function formatBytes(n) {
   if (!n) return '0 B'
-  if (n < 1024) return `${n} B`
+  // Rounded even in the sub-1024 branch: n can be a smoothed float (the
+  // traffic-trend curve's per-second samples are a triangular running
+  // average, not a raw integer byte count), and "187.8095245361328 B" is
+  // never a real quantity anyone wants to read.
+  if (n < 1024) return `${Math.round(n)} B`
   const units = ['KB', 'MB', 'GB', 'TB']
   let v = n / 1024
   let i = 0

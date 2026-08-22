@@ -24,7 +24,10 @@ export default function InterfaceInfo() {
   useEffect(() => {
     let alive = true
     const poll = () => {
-      fetch('/api/iface/info')
+      // no-store: this drives a live speed readout, so every 2s tick must
+      // hit the server for a fresh sample rather than risk a cached one —
+      // same reasoning as the server's own Cache-Control on this endpoint.
+      fetch('/api/iface/info', { cache: 'no-store' })
         .then((r) => r.json())
         .then((d) => { if (alive) setData(d) })
         .catch(() => {})

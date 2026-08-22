@@ -86,7 +86,7 @@ uname -r    # 需 ≥ 5.8（TCX 需 ≥ 6.6）
 ## 3. 获取并构建
 
 ```bash
-git clone <仓库地址> BeeEye
+git clone https://github.com/cn0xroot/BeeEye.git BeeEye
 cd BeeEye
 
 # 一键：预检工具链 → 生成 vmlinux.h → 编译 eBPF → 构建两个后端 → 构建两个前端 → 启动

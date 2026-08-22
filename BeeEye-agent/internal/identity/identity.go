@@ -42,11 +42,15 @@ var ouiTable = map[string]ouiInfo{
 	"44650d": {"Amazon (Echo)", model.CatSpeaker, "Echo Dot"},
 }
 
-// hostnameHints refine the category using DHCP hostname / mDNS names (§3.5.2).
-var hostnameHints = []struct {
+// catHint maps a substring of some passively-observed string (hostname,
+// User-Agent, SSDP Server header, ...) to a device category guess.
+type catHint struct {
 	sub string
 	cat model.DeviceCategory
-}{
+}
+
+// hostnameHints refine the category using DHCP hostname / mDNS names (§3.5.2).
+var hostnameHints = []catHint{
 	{"cam", model.CatCamera},
 	{"ipc", model.CatCamera},
 	{"lock", model.CatLock},
@@ -65,6 +69,47 @@ var hostnameHints = []struct {
 	{"fridge", model.CatFridge},
 }
 
+// vendorClassHints refine the category (and, when still unknown, the vendor)
+// from DHCP option 60 — many device families self-report a distinctive
+// prefix here (Android's DHCP client, embedded camera/NVR firmware, Windows'
+// "MSFT" string, busybox udhcpc used by most embedded Linux routers/APs).
+// Illustrative examples, not a full Fingerbank dataset (see package doc).
+var vendorClassHints = []struct {
+	sub    string
+	vendor string
+	cat    model.DeviceCategory
+}{
+	{"android-dhcp", "", model.CatPhone},
+	{"msft 5.0", "Microsoft", model.CatLaptop},
+	{"udhcp", "", model.CatRouter},
+	{"hikvision", "Hangzhou Hikvision", model.CatCamera},
+	{"dahua", "Dahua Technology", model.CatCamera},
+}
+
+// userAgentHints refine the category from an HTTP User-Agent a device sent
+// (a camera's web-UI heartbeat, a phone's browser, an NVR's firmware update
+// check, ...).
+var userAgentHints = []catHint{
+	{"iphone", model.CatPhone},
+	{"ipad", model.CatPhone},
+	{"android", model.CatPhone},
+	{"macintosh", model.CatLaptop},
+	{"windows nt", model.CatLaptop},
+	{"hikvision", model.CatCamera},
+	{"dahua", model.CatCamera},
+	{"dvrip", model.CatCamera},
+}
+
+// ssdpServerHints refine the category from SSDP's Server: header, which most
+// UPnP-capable devices (NAS boxes, TVs, speakers, routers) send verbatim in
+// their discovery responses.
+var ssdpServerHints = []catHint{
+	{"synology", model.CatNAS},
+	{"dlna", model.CatTV},
+	{"sonos", model.CatSpeaker},
+	{"roku", model.CatTV},
+}
+
 // Result is the outcome of a passive identification pass.
 type Result struct {
 	Vendor     string
@@ -72,8 +117,31 @@ type Result struct {
 	Category   model.DeviceCategory
 }
 
-// Identify infers vendor/model/category from a MAC and optional hostname.
-func Identify(mac, hostname string) Result {
+// Fingerprint carries the passive signals a device's own traffic exposes —
+// the same data a real Fingerbank-style matcher keys on (F1's gap). Every
+// field is optional; Identify only uses what is non-empty, so a device that
+// never sent DHCP/HTTP/SSDP traffic is identified exactly as before, from
+// MAC OUI and hostname alone.
+type Fingerprint struct {
+	// DHCPParams is DHCP option 55 (parameter request list), e.g.
+	// "1,3,6,15,119,252". It is carried through but not yet matched against
+	// a signature table: unlike VendorClass/UserAgent/SSDPServer, which are
+	// vendor-chosen human-readable strings, option 55's request-list values
+	// only distinguish device *stacks* against a large vetted reference
+	// database (what Fingerbank actually sells) — fabricating one here would
+	// misattribute devices with false confidence, so this field is a
+	// documented extension point rather than guessed at.
+	DHCPParams  string
+	VendorClass string // DHCP option 60
+	UserAgent   string
+	SSDPServer  string
+}
+
+// Identify infers vendor/model/category from a MAC, optional hostname, and
+// whatever passive Fingerprint fields were observed. Signals are applied
+// most-specific-first and only ever refine an unknown category — an OUI hit
+// is never second-guessed by a weaker signal.
+func Identify(mac, hostname string, fp Fingerprint) Result {
 	r := Result{Vendor: "Unknown", ModelGuess: "", Category: model.CatUnknown}
 	prefix := normalizeOUI(mac)
 	if info, ok := ouiTable[prefix]; ok {
@@ -81,17 +149,37 @@ func Identify(mac, hostname string) Result {
 		r.ModelGuess = info.model
 		r.Category = info.category
 	}
-	// Hostname hint overrides an unknown/ambiguous OUI category.
-	h := strings.ToLower(hostname)
-	for _, hint := range hostnameHints {
-		if strings.Contains(h, hint.sub) {
-			if r.Category == model.CatUnknown {
-				r.Category = hint.cat
+	applyCatHint(&r, strings.ToLower(hostname), hostnameHints)
+	if r.Category == model.CatUnknown && fp.VendorClass != "" {
+		vc := strings.ToLower(fp.VendorClass)
+		for _, h := range vendorClassHints {
+			if strings.Contains(vc, h.sub) {
+				r.Category = h.cat
+				if h.vendor != "" && r.Vendor == "Unknown" {
+					r.Vendor = h.vendor
+				}
+				break
 			}
-			break
 		}
 	}
+	applyCatHint(&r, strings.ToLower(fp.UserAgent), userAgentHints)
+	applyCatHint(&r, strings.ToLower(fp.SSDPServer), ssdpServerHints)
 	return r
+}
+
+// applyCatHint sets r.Category from the first matching hint, but only while
+// the category is still unknown — a later, weaker signal must never override
+// an earlier, more specific one.
+func applyCatHint(r *Result, s string, hints []catHint) {
+	if r.Category != model.CatUnknown || s == "" {
+		return
+	}
+	for _, h := range hints {
+		if strings.Contains(s, h.sub) {
+			r.Category = h.cat
+			return
+		}
+	}
 }
 
 // normalizeOUI extracts the lowercased first 3 bytes (6 hex chars) of a MAC.
