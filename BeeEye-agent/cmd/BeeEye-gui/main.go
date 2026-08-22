@@ -5,8 +5,9 @@
 // binary leaves the other one working.
 //
 // Privileges: real capture needs CAP_NET_RAW. Without it the process still
-// starts and falls back to the simulated source, labeled as such in the UI —
-// see F43. Grant the capability without running as root with:
+// starts, but Start (and -autostart) fail outright rather than falling back
+// to a synthetic source — there is none (F43). Grant the capability without
+// running as root with:
 //
 //	sudo setcap cap_net_raw,cap_net_admin+ep ./bin/BeeEye-gui
 package main
@@ -60,18 +61,13 @@ func main() {
 	if *iface != "" && *autostart {
 		opt := gui.StartOptions{Iface: *iface, Promisc: *promisc,
 			SnapLen: live.DefaultSnapLen, Filter: *filter}
+		// Start returns live.Open's error directly (F43 — no synthetic source
+		// to fall back to), so reaching past this point means real capture.
 		if err := sess.Start(opt); err != nil {
 			log.Fatalf("start capture on %s: %v", *iface, err)
 		}
 		st := sess.Status()
-		if st.RealCapture {
-			log.Printf("capturing on %s via %s", st.Iface, st.Source)
-		} else {
-			// Say this loudly. Quietly serving synthetic packets that look
-			// like a live capture is the one failure mode worth shouting about.
-			log.Printf("WARNING: real capture unavailable (%s)", st.FallbackReason)
-			log.Printf("falling back to the SIMULATED source — these packets are not real traffic")
-		}
+		log.Printf("capturing on %s via %s", st.Iface, st.Source)
 	} else {
 		// Idle by default (even with -iface set): opening the analyzer used
 		// to start capturing traffic before anyone asked it to, which is a

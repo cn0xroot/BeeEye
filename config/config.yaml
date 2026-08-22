@@ -63,9 +63,5 @@ mitm:
   ca_dir: "./data/mitm"    # 根证书 ca.pem/ca.key 的存放目录,首次启动自动生成
   max_log: 500              # 内存中保留的最近解密请求/响应条数,超出后淘汰最旧的
 
-# 演示/开发模式:无 eBPF 内核时用内置模拟采集源生成场景数据。
-# 固定 seed → 可复现的测试数据集。
-simulate_seed: 42
-
 # 知名端口 → 服务名映射 (F24, §3.5.4)。留空则用内置默认表。
 port_service_map_file: "./config/port-service-map.yaml"

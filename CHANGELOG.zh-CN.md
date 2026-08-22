@@ -4,6 +4,16 @@
 
 [English](CHANGELOG.md)
 
+## [1.3.1] — 2026-08-22
+
+### 移除
+
+- **彻底移除了模拟抓包回退机制**（F43 贯彻到底）：agent 侧一次性的、固定十个虚构设备的演示场景（`internal/capture.GenerateSimulated`）和分析器侧持续生成合成数据包的生成器（`internal/live.OpenSimulated`）都已删除，连带 `-simulate` 参数和 `simulate_seed` 配置项一并去掉。`internal/live.Open`/`internal/capsource.Open` 现在在找不到真实抓包源时直接返回错误，而不是退化成合成数据——总览和分析器会诚实地显示"无数据/不可用"，而不是伪造流量。这也顺带修复了背后真正的 bug：`internal/gui.Session.Start` 之前即使 `live.Open` 失败也会无条件调用 `startWith`，导致真实抓包打不开时分析器会悄悄跑在假数据包上——现在会直接把这个错误原样返回。两端前端状态栏里的"模拟数据"徽章也都换成了诚实的"不可用/非实时"提示。
+
+### 修复
+
+- **过期的模拟场景数据会永久污染真实设备列表**：在上面这次移除之前，只要同一个磁盘数据库曾经有一次因为打开真实抓包源瞬时失败（或者跑过 `-simulate`）而回退到模拟场景，它固定的十个虚构设备（`front-door-lock`、`kitchen-echo`、`synology-nas` 等）就会被写进和真实抓包完全同一套 `device_registry`/`connections`/`dns_records`/`events` 表，落盘之后没有任何字段能区分它是不是真的——于是总览会一直混着这些从来没在网络里出现过的幽灵设备。`main.go` 里的 `legacySimulatedMACs` 仅为这一次性迁移清理保留了这份固定的、已知的 MAC 列表：agent 一确认真实抓包在正常工作，就会调用 `store.PurgeByMAC` 把这些行清掉——在这台机器自己的数据库上验证过：设备数从 18（10 个假的 + 8 个真的）降到 8 个真实设备，`/api/devices` 里那些虚构主机名也一并消失了。
+
 ## [1.3.0] — 2026-08-21
 
 ### 新增

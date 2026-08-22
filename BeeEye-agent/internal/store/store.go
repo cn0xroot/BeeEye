@@ -203,6 +203,37 @@ func (s *Store) SetCategory(mac string, cat model.DeviceCategory) error {
 	return err
 }
 
+// PurgeByMAC deletes every row across device_registry/connections/dns_records/
+// events that belongs to any of macs. Built for exactly one situation: an
+// on-disk database from before this project removed its simulated-scenario
+// fallback entirely (see main.go's legacySimulatedMACs and internal/live's
+// doc comment on why there is no fallback at all anymore) may still have
+// that scenario's ten fixed, fabricated devices sitting in the same tables
+// real capture uses, with nothing distinguishing them at rest. A run that
+// now has real capture working calls this once with that known MAC list to
+// clean them out — see main.go's call site — rather than a household's
+// device list quietly keeping ten devices that were never real (F43's
+// "never let simulated data pass as real" extended to what persists on
+// disk, not just what a given process is doing right now).
+func (s *Store) PurgeByMAC(macs []string) error {
+	if len(macs) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	args := make([]any, len(macs))
+	for i, m := range macs {
+		args[i] = m
+	}
+	ph := placeholders(len(macs))
+	for _, table := range []string{"device_registry", "connections", "dns_records", "events"} {
+		if _, err := s.db.Exec(`DELETE FROM `+table+` WHERE mac IN (`+ph+`)`, args...); err != nil {
+			return fmt.Errorf("store: purge %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
 // ---------- connections ----------
 
 func (s *Store) InsertConnection(c *model.Connection) error {
@@ -333,8 +364,8 @@ func (s *Store) ConnectionTotals(iface string) (ConnTotals, error) {
 
 // ImportBatch summarizes one distinct "iface" value's rows in connections —
 // in practice, one imported capture file (see ConnFilter.Iface's comment).
-// liveIface is excluded so the live NIC (or "simulated") doesn't show up
-// alongside genuine imports.
+// liveIface is excluded so the live NIC doesn't show up alongside genuine
+// imports.
 type ImportBatch struct {
 	Iface string    `json:"iface"`
 	Count int       `json:"count"`

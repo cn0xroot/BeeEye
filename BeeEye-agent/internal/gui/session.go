@@ -66,16 +66,21 @@ const DefaultRingSize = 20000
 type Session struct {
 	mu sync.RWMutex
 
-	src         live.Source
-	iface       string
-	realCapture bool   // false when the simulator is standing in (F43)
+	src   live.Source
+	iface string
+	// realCapture is always true for any Session that reached startWith: Start
+	// returns live.Open's error directly rather than proceeding on a nil/fake
+	// source (F43 — see Start's own comment). Kept as a field, not hardcoded,
+	// so the Status JSON contract (real_capture) stays meaningful rather than
+	// every caller assuming success implies live.
+	realCapture bool
 	fallbackErr string // why the real capture was unavailable
 	started     time.Time
 	running     bool
 	// offline is true when src is replaying a .pcap file (OpenFile) rather
 	// than capturing a NIC — its own honesty flag alongside realCapture,
 	// since "this is history, not this second" is a different fact than
-	// "this is the simulator standing in" (F43 is about the latter).
+	// "this is a live NIC capture" (F43 is about never faking either one).
 	offline bool
 	// consumeDone is closed by the currently running consume() goroutine
 	// when its packet channel closes and it returns. startWith waits on it
@@ -296,7 +301,17 @@ func (s *Session) Start(opt StartOptions) error {
 	// long-running process eBPF's lower overhead matters most for, it gets
 	// first claim; the analyzer, started on demand, uses the capture path
 	// that has always supported multiple independent readers on one NIC.
+	// live.Open has no simulated fallback to hand back on failure (see its
+	// own doc comment) — src is nil whenever openErr is non-nil, and
+	// startWith has no source to actually run, so this must return here
+	// rather than proceed into a nil Source. Before this, Start always
+	// called startWith regardless, which is exactly how the analyzer's own
+	// packet list/field/detail panes ended up silently showing fabricated
+	// traffic whenever the real capture failed to open.
 	src, real, openErr := live.Open(opt.Iface, opt.SnapLen, opt.Promisc)
+	if openErr != nil {
+		return openErr
+	}
 	return s.startWith(src, opt.Iface, opt.SnapLen, opt.Filter, real, openErr, false)
 }
 
@@ -550,7 +565,7 @@ func (s *Session) Subscribe(buffer int) (<-chan *dissect.Result, func()) {
 type Status struct {
 	Running        bool      `json:"running"`
 	Iface          string    `json:"iface"`
-	Source         string    `json:"source"`       // af_packet | simulator | ebpf
+	Source         string    `json:"source"`       // af_packet | pcap-file
 	RealCapture    bool      `json:"real_capture"` // F43: never imply live data we do not have
 	FallbackReason string    `json:"fallback_reason,omitempty"`
 	Started        time.Time `json:"started"`
@@ -565,8 +580,8 @@ type Status struct {
 	CaptureFile    string    `json:"capture_file,omitempty"` // where the live capture is being saved
 	// Offline is true while replaying a .pcap file (OpenFile) — Iface holds
 	// the filename in that case. Own honesty flag alongside RealCapture: "this
-	// is history, not this second" is a different fact than F43's "this is
-	// the simulator standing in for a NIC we could not open."
+	// is history, not this second" is a different fact from whether the data
+	// itself is real (F43 — there is no non-real state left to conflate it with).
 	Offline bool `json:"offline,omitempty"`
 }
 

@@ -2,7 +2,9 @@
 // this host, trying each in order and falling back to the next when one
 // cannot be used: eBPF ring buffer (lowest per-packet overhead, needs kernel
 // ≥6.6 for TCX plus CAP_BPF/CAP_PERFMON/CAP_NET_ADMIN) → AF_PACKET (works on
-// any kernel with CAP_NET_RAW) → the built-in simulator.
+// any kernel with CAP_NET_RAW). If neither is available, Open returns an
+// error rather than a synthetic source — see internal/live's own doc comment
+// for why this project does not ship a simulated fallback.
 //
 // This lives above both internal/ebpf and internal/live rather than inside
 // either of them: internal/ebpf already depends on internal/live for the
@@ -30,11 +32,10 @@ import (
 	"BeeEye/internal/live"
 )
 
-// Open tries eBPF first, then AF_PACKET, then the simulator — the same
-// three-tier degradation live.Open documents, with eBPF spliced in ahead of
-// it. The returned bool matches live.Open's contract (real capture, whether
-// eBPF or AF_PACKET, vs. the simulator); err is only ever non-nil when even
-// the simulator's construction failed to open on iface, matching live.Open.
+// Open tries eBPF first, then AF_PACKET — eBPF spliced in ahead of the
+// two-tier degradation live.Open documents. The returned bool matches
+// live.Open's contract (true only for a real capture); err is non-nil
+// whenever neither source could be opened, matching live.Open.
 func Open(iface string, snaplen int, promisc bool) (live.Source, bool, error) {
 	if src, err := ebpf.OpenEBPF(iface); err == nil {
 		return src, true, nil

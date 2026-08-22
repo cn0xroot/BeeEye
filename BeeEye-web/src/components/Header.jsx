@@ -56,10 +56,10 @@ export default function Header({ view, onView, theme, resolvedTheme, onTheme, fo
           <div className="brand-sub">
             {t('app.subtitle')}
             {source && (
-              <span className={`source-badge ${source.live ? 'live' : 'sim'}`}>
+              <span className={`source-badge ${source.live ? 'live' : 'unavailable'}`}>
                 {source.live
                   ? t('source.live', { iface: source.iface || '' })
-                  : t('source.simulated')}
+                  : t('source.unavailable')}
               </span>
             )}
           </div>

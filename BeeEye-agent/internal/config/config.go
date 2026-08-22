@@ -77,9 +77,6 @@ type Config struct {
 	Detection   Detection         `yaml:"detection"`
 	ThreatIntel ThreatIntelConfig `yaml:"threat_intel"`
 	MITM        MITMConfig        `yaml:"mitm"`
-	// SimulateSeed drives the built-in simulated capture source used when no
-	// eBPF-capable kernel is attached (dev / demo mode).
-	SimulateSeed int64 `yaml:"simulate_seed"`
 	// PortServiceMapFile points at the user-editable port→service table (F24,
 	// §3.5.4). Empty means "use the built-in defaults".
 	PortServiceMapFile string `yaml:"port_service_map_file"`
@@ -88,10 +85,9 @@ type Config struct {
 // Default returns a config populated with the program.md baseline values.
 func Default() *Config {
 	c := &Config{
-		ListenAddr:   ":8080",
-		DBPath:       "./data/BeeEye.db",
-		WebDir:       "./BeeEye-web/dist",
-		SimulateSeed: 42,
+		ListenAddr: ":8080",
+		DBPath:     "./data/BeeEye.db",
+		WebDir:     "./BeeEye-web/dist",
 	}
 	c.Interfaces.Mode = "explicit"
 	c.Interfaces.ExplicitList = []Interface{

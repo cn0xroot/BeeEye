@@ -43,8 +43,8 @@
     "source": "采集源",
     "idle": "空闲",
     "capturing": "抓包中",
-    "simulated": "模拟数据 — 非真实流量",
-    "simulatedHelp": "本机无法进行真实抓包,分析器正在回放合成流量。原因:{{reason}}",
+    "nonLive": "非实时",
+    "nonLiveHelp": "本机当前无法进行真实抓包。原因:{{reason}}",
     "renderer": "颜色场",
     "rendererCuda": "GPU(CUDA)",
     "rendererCpu": "CPU"

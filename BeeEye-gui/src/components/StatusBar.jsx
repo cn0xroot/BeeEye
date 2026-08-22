@@ -2,25 +2,27 @@ import { useTranslation } from 'react-i18next'
 import { formatBytes } from '../api'
 
 // StatusBar carries the honesty requirement (F43): whichever capture source is
-// actually in effect is named here, and a simulated source is called out
-// loudly rather than being allowed to pass for live traffic.
+// actually in effect is named here. There is no simulated source to fall back
+// to — real_capture only ever reads false in the idle state, before Start has
+// ever succeeded — but the warning is kept as a guard rather than assumed
+// away, so a future regression here would be visible rather than silent.
 export default function StatusBar({ status }) {
   const { t } = useTranslation()
   if (!status) return null
 
-  const simulated = status.running && !status.real_capture
+  const nonLive = status.running && !status.real_capture
 
   return (
-    <footer className={`statusbar ${simulated ? 'simulated' : ''}`}>
+    <footer className={`statusbar ${nonLive ? 'non-live' : ''}`}>
       <span className={`dot ${status.running ? 'live' : 'idle'}`} aria-hidden="true" />
       <span className="st-primary">
         {status.running ? t('status.capturing') : t('status.idle')}
         {status.iface ? ` · ${status.iface}` : ''}
       </span>
 
-      {simulated && (
-        <span className="st-warn" title={t('status.simulatedHelp', { reason: status.fallback_reason || '—' })}>
-          ⚠ {t('status.simulated')}
+      {nonLive && (
+        <span className="st-warn" title={t('status.nonLiveHelp', { reason: status.fallback_reason || '—' })}>
+          ⚠ {t('status.nonLive')}
         </span>
       )}
 

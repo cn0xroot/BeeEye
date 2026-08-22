@@ -103,7 +103,7 @@ cd BeeEye
 
 ## 4. 授予抓包与解密权限（免 root）
 
-不配权限也能跑（自动回退到模拟数据并标注），但要抓真实流量和解密 HTTPS，需要授予 capability：
+不配权限也能跑（如实标注为「无数据」，不存在模拟数据兜底），但要抓真实流量和解密 HTTPS，需要授予 capability：
 
 ```bash
 ./start.sh --setcap
@@ -137,7 +137,7 @@ interfaces:
       role: wifi_ap
 ```
 
-挂 **LAN 侧**而非 WAN 侧 —— 经 NAT 后设备级身份就没了。若配置里的网卡本机不存在，程序会自动回退到默认路由网卡，不会静默变模拟数据。
+挂 **LAN 侧**而非 WAN 侧 —— 经 NAT 后设备级身份就没了。若配置里的网卡本机不存在，程序会自动回退到默认路由网卡，而不是对一张根本不存在的网卡静默报告"无数据"。
 
 ---
 
@@ -199,7 +199,7 @@ sudo ./scripts/tls-decrypt.sh capture --app adspower
 | `/sys/kernel/btf/vmlinux missing` | 内核未开 BTF，换通用内核 |
 | `bpftool: command not found` | `apt install linux-tools-$(uname -r)` |
 | `go: command not found` 或版本过旧 | 按 §1 从官网装 Go ≥ 1.25 |
-| 分析器显示「模拟」 | 无抓包权限，跑 `./start.sh --setcap` 后 `restart` |
+| 分析器点 Start 报权限错误 | 无抓包权限，跑 `./start.sh --setcap` 后 `restart` |
 | 总览无设备/连接 | 同上；或确认网卡上有真实流量 |
 | HTTPS 解密 `attached:0` | 缺 `cap_bpf,cap_perfmon`，见 §4 |
 | 5173/5174 打不开 | 它们只在 `./start.sh --dev` 时启动 |
