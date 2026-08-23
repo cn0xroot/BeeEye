@@ -20,12 +20,15 @@
 | bpftool | any | generates `vmlinux.h` |
 | libbpf headers | any | eBPF build dependency |
 | Node.js | ≥ 18 | builds the two frontends |
+| Rust / cargo | optional | builds `BeeEye-desktop`, the native window shell (`--desktop`) |
 | CUDA toolkit | optional | GPU colour-field rendering; the CPU path is identical |
 | tshark | optional | the SSLKEYLOGFILE decryption path for Chrome/AdsPower |
 
 ---
 
-## 1. Install system dependencies (Ubuntu / Debian)
+## 1. Install system dependencies
+
+### Ubuntu / Debian
 
 ```bash
 sudo apt update
@@ -40,13 +43,37 @@ sudo apt install -y \
 bpftool version     # confirm bpftool is available
 ```
 
-> **Other distributions**:
-> - Fedora/RHEL: `sudo dnf install clang llvm libbpf-devel bpftool nodejs npm make git`
-> - Arch: `sudo pacman -S clang llvm libbpf bpf nodejs npm make git`
+### Arch Linux
 
-### Install Go (≥ 1.25)
+```bash
+sudo pacman -S --needed \
+  clang llvm libbpf bpf \
+  libcap \
+  go \
+  nodejs npm \
+  git make curl \
+  wireshark-cli     # optional: provides tshark for browser SSLKEYLOGFILE decryption
 
-Distro packages are often too old; install from upstream:
+bpftool version     # provided by the 'bpf' package
+go version          # Arch ships Go ≥ 1.25 — no manual install needed
+```
+
+> **Notes for Arch**:
+> - The `bpf` package provides `bpftool` (on Debian/Ubuntu it comes from `linux-tools`).
+> - Arch's `go` package is kept up-to-date; you can skip the manual Go install below.
+> - Arch kernels ship with BTF enabled by default.
+> - `libcap` provides `setcap` (equivalent to Debian's `libcap2-bin`).
+
+### Fedora / RHEL
+
+```bash
+sudo dnf install clang llvm libbpf-devel bpftool nodejs npm make git \
+  golang wireshark-cli
+```
+
+### Install Go (≥ 1.25) — manual method
+
+If your distro's Go is too old (common on Debian/Ubuntu), install from upstream:
 
 ```bash
 GO_VER=1.25.0
@@ -56,6 +83,46 @@ echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee /etc/profile.d/go.sh
 export PATH=$PATH:/usr/local/go/bin
 go version   # should be ≥ go1.25
 ```
+
+> **Arch / Fedora users**: skip this — `pacman -S go` / `dnf install golang` already
+> provides a sufficiently recent version.
+
+### (Optional) Rust — for the `BeeEye-desktop` native window
+
+`BeeEye-desktop` is a thin Tauri 2 shell around the analyzer UI. Everything works
+without it (use the browser at :8081); it is only needed for `./start.sh --desktop`.
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+. "$HOME/.cargo/env"          # add to ~/.bashrc to make it permanent
+cargo --version
+```
+
+Tauri also needs GTK/WebKit system libraries:
+
+```bash
+# Debian / Ubuntu
+sudo apt install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+  libayatana-appindicator3-dev librsvg2-dev build-essential pkg-config
+
+# Arch (webkit2gtk-4.1 and gtk3 are usually already present)
+sudo pacman -S --needed webkit2gtk-4.1 gtk3 librsvg libayatana-appindicator \
+  base-devel pkgconf
+
+# Fedora
+sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel \
+  librsvg2-devel @development-tools
+```
+
+Then build and launch:
+
+```bash
+./start.sh --desktop
+```
+
+> `start.sh` rebuilds the desktop binary automatically whenever it is stale. If
+> `cargo` is not on PATH it prints `skipping BeeEye-desktop` and continues — the
+> web UIs are unaffected.
 
 ### (Optional) CUDA toolkit
 
@@ -213,13 +280,15 @@ See [TLS-DECRYPT.md](TLS-DECRYPT.md) and [USAGE.md](USAGE.md) §9.
 | Symptom | Fix |
 |---|---|
 | `/sys/kernel/btf/vmlinux missing` | kernel lacks BTF; use a generic kernel |
-| `bpftool: command not found` | `apt install linux-tools-$(uname -r)` |
+| `bpftool: command not found` | Debian/Ubuntu: `apt install linux-tools-$(uname -r)`; Arch: `pacman -S bpf` |
 | `go: command not found` / too old | install Go ≥ 1.25 from upstream (§1) |
 | analyzer's Start fails with a permission error | no capture permission; `./start.sh --setcap` then `restart` |
 | overview has no devices/connections | same as above; or confirm real traffic on the NIC |
 | HTTPS decryption `attached:0` | missing `cap_bpf,cap_perfmon` (§4) |
 | 5173/5174 won't open | they start only with `./start.sh --dev` |
 | port already in use | `./start.sh stop`; clean up 8080/8081/5173/5174 if needed |
+| `skipping BeeEye-desktop (no cargo)` | Rust is not installed or not on PATH; see §1 and `. "$HOME/.cargo/env"` |
+| `Permission denied` on `.run/*.pid` | the stack was once started with `sudo`, leaving root-owned files: `sudo ./scripts/dev.sh stop && sudo chown -R $USER:$USER .run data` |
 
 ---
 

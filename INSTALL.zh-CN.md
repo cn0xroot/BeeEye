@@ -19,12 +19,15 @@
 | bpftool | 任意 | 生成 `vmlinux.h` |
 | libbpf 头文件 | 任意 | eBPF 编译依赖 |
 | Node.js | ≥ 18 | 构建两个前端 |
+| Rust / cargo | 可选 | 构建 `BeeEye-desktop` 原生窗口外壳（`--desktop`） |
 | CUDA 工具链 | 可选 | 流量色场 GPU 渲染；无则走 CPU，画面相同 |
 | tshark | 可选 | Chrome/AdsPower 的 SSLKEYLOGFILE 解密链路 |
 
 ---
 
-## 1. 安装系统依赖（Ubuntu / Debian）
+## 1. 安装系统依赖
+
+### Ubuntu / Debian
 
 ```bash
 sudo apt update
@@ -40,13 +43,37 @@ sudo apt install -y \
 bpftool version
 ```
 
-> **其它发行版**：
-> - Fedora/RHEL：`sudo dnf install clang llvm libbpf-devel bpftool nodejs npm make git`
-> - Arch：`sudo pacman -S clang llvm libbpf bpf nodejs npm make git`
+### Arch Linux
 
-### 安装 Go（≥ 1.25）
+```bash
+sudo pacman -S --needed \
+  clang llvm libbpf bpf \
+  libcap \
+  go \
+  nodejs npm \
+  git make curl \
+  wireshark-cli     # 可选：提供 tshark 用于浏览器 SSLKEYLOGFILE 解密
 
-系统仓库的 Go 往往偏旧，建议从官网装：
+bpftool version     # 由 'bpf' 包提供
+go version          # Arch 仓库自带 Go ≥ 1.25，无需手动装
+```
+
+> **Arch 注意事项**：
+> - `bpf` 包提供 `bpftool`（Debian/Ubuntu 上由 `linux-tools` 提供）。
+> - Arch 的 `go` 包保持最新，可跳过下方手动安装 Go 的步骤。
+> - Arch 官方内核默认启用 BTF。
+> - `libcap` 提供 `setcap`（等同于 Debian 的 `libcap2-bin`）。
+
+### Fedora / RHEL
+
+```bash
+sudo dnf install clang llvm libbpf-devel bpftool nodejs npm make git \
+  golang wireshark-cli
+```
+
+### 安装 Go（≥ 1.25）— 手动方式
+
+若你的发行版 Go 版本过旧（Debian/Ubuntu 常见），从官网安装：
 
 ```bash
 GO_VER=1.25.0
@@ -56,6 +83,45 @@ echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee /etc/profile.d/go.sh
 export PATH=$PATH:/usr/local/go/bin
 go version   # 应 ≥ go1.25
 ```
+
+> **Arch / Fedora 用户**：可跳过此步 —— `pacman -S go` / `dnf install golang`
+> 已提供足够新的版本。
+
+### （可选）Rust —— 用于 `BeeEye-desktop` 原生窗口
+
+`BeeEye-desktop` 是包在分析器 UI 外面的一层 Tauri 2 薄壳。不装也完全能用
+（浏览器打开 :8081 即可），仅 `./start.sh --desktop` 需要它。
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+. "$HOME/.cargo/env"          # 写进 ~/.bashrc 可永久生效
+cargo --version
+```
+
+Tauri 还需要 GTK/WebKit 系统库：
+
+```bash
+# Debian / Ubuntu
+sudo apt install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+  libayatana-appindicator3-dev librsvg2-dev build-essential pkg-config
+
+# Arch（webkit2gtk-4.1 与 gtk3 通常已装）
+sudo pacman -S --needed webkit2gtk-4.1 gtk3 librsvg libayatana-appindicator \
+  base-devel pkgconf
+
+# Fedora
+sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel \
+  librsvg2-devel @development-tools
+```
+
+然后构建并启动：
+
+```bash
+./start.sh --desktop
+```
+
+> `start.sh` 会在桌面端二进制过期时自动重建。若 PATH 里没有 `cargo`，它会打印
+> `skipping BeeEye-desktop` 并继续 —— 不影响两个 Web UI。
 
 ### （可选）CUDA 工具链
 
@@ -197,13 +263,15 @@ sudo ./scripts/tls-decrypt.sh capture --app adspower
 | 现象 | 解决 |
 |---|---|
 | `/sys/kernel/btf/vmlinux missing` | 内核未开 BTF，换通用内核 |
-| `bpftool: command not found` | `apt install linux-tools-$(uname -r)` |
+| `bpftool: command not found` | Debian/Ubuntu：`apt install linux-tools-$(uname -r)`；Arch：`pacman -S bpf` |
 | `go: command not found` 或版本过旧 | 按 §1 从官网装 Go ≥ 1.25 |
 | 分析器点 Start 报权限错误 | 无抓包权限，跑 `./start.sh --setcap` 后 `restart` |
 | 总览无设备/连接 | 同上；或确认网卡上有真实流量 |
 | HTTPS 解密 `attached:0` | 缺 `cap_bpf,cap_perfmon`，见 §4 |
 | 5173/5174 打不开 | 它们只在 `./start.sh --dev` 时启动 |
 | 端口被占用 | `./start.sh stop`，必要时手动清理 8080/8081/5173/5174 |
+| `skipping BeeEye-desktop (no cargo)` | 未装 Rust 或不在 PATH 中，见 §1，并执行 `. "$HOME/.cargo/env"` |
+| `.run/*.pid` 报 `Permission denied` | 曾用 `sudo` 启动过，残留 root 属主文件：`sudo ./scripts/dev.sh stop && sudo chown -R $USER:$USER .run data` |
 
 ---
 

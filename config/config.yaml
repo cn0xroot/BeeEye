@@ -10,9 +10,9 @@ web_dir: "./BeeEye-web/dist"
 interfaces:
   mode: explicit
   explicit_list:
-    - name: wlan0
+    - name: wlp14s0u2
       role: wifi_ap        # 无线接入 → access_type=wireless (F17)
-    - name: eth0
+    - name: enp12s0
       role: wan_uplink
     # - name: wlx00c0ca9701f2   # USB 网卡等非标准命名同样支持
     #   role: wifi_ap
