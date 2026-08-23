@@ -260,7 +260,7 @@ func sctpChunk(typ, flags byte, value []byte) []byte {
 }
 
 func TestDissectSCTPInit(t *testing.T) {
-	initBody := make([]byte, 16) // initiate tag, a_rwnd, outbound/inbound streams, init TSN — contents unchecked here
+	initBody := make([]byte, 16)                                              // initiate tag, a_rwnd, outbound/inbound streams, init TSN — contents unchecked here
 	payload := buildSCTP(38412, 38412, 0x12345678, sctpChunk(1, 0, initBody)) // 1 = INIT
 	f := live.BuildEthernet(gwMAC, devMAC, 0x0800,
 		live.BuildIPv4(devIP, extIP, 132, 64, 12, payload))
@@ -286,11 +286,11 @@ func TestDissectSCTPInit(t *testing.T) {
 func TestDissectSCTPDataBundledWithSack(t *testing.T) {
 	sackBody := make([]byte, 12) // cumulative TSN ack, a_rwnd, 0 gap-acks, 0 dup-TSNs
 	dataHdr := make([]byte, 16)
-	binary.BigEndian.PutUint32(dataHdr[0:4], 42)   // TSN
-	binary.BigEndian.PutUint16(dataHdr[4:6], 3)    // stream ID
-	binary.BigEndian.PutUint32(dataHdr[8:12], 18)  // PPID 18 = S1AP, per 3GPP TS 36.412 — used here only as an arbitrary distinct number, not asserted by name (see dissectSCTP's doc comment on why PPIDs are not name-resolved)
-	dataChunk := sctpChunk(0, 0, dataHdr)           // 0 = DATA
-	sackChunk := sctpChunk(3, 0, sackBody)          // 3 = SACK
+	binary.BigEndian.PutUint32(dataHdr[0:4], 42)  // TSN
+	binary.BigEndian.PutUint16(dataHdr[4:6], 3)   // stream ID
+	binary.BigEndian.PutUint32(dataHdr[8:12], 18) // PPID 18 = S1AP, per 3GPP TS 36.412 — used here only as an arbitrary distinct number, not asserted by name (see dissectSCTP's doc comment on why PPIDs are not name-resolved)
+	dataChunk := sctpChunk(0, 0, dataHdr)         // 0 = DATA
+	sackChunk := sctpChunk(3, 0, sackBody)        // 3 = SACK
 	payload := buildSCTP(38412, 38412, 0xaabbccdd, sackChunk, dataChunk)
 	f := live.BuildEthernet(gwMAC, devMAC, 0x0800,
 		live.BuildIPv4(devIP, extIP, 132, 64, 13, payload))
@@ -521,8 +521,8 @@ func TestDissectGSMTAPSIMSelect(t *testing.T) {
 		0x04,       // type = SIM
 		0x00,       // timeslot
 		0x00, 0x00, // arfcn
-		0x00, // signal_dbm
-		0x00, // snr_db
+		0x00,                   // signal_dbm
+		0x00,                   // snr_db
 		0x00, 0x00, 0x00, 0x00, // frame_number
 		0x01, // sub_type
 		0x00, // antenna_nr

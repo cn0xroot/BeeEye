@@ -27,6 +27,28 @@ ROOT=$(pwd)
 RUN_DIR="$ROOT/.run"
 BIN="$ROOT/BeeEye-agent/bin"
 
+# Guard: running start/restart/stop as root leaves root-owned pidfiles and
+# databases that break every subsequent non-root invocation. The only command
+# that genuinely needs root is --setcap, and it calls sudo internally. If
+# someone runs `sudo ./start.sh` out of habit, refuse early with a clear
+# message instead of silently poisoning .run/ and data/.
+if [[ "$(id -u)" == 0 && "${1:-}" != "--setcap" ]]; then
+  printf '\033[31m%s\033[0m\n' \
+    "ERROR: do not run start.sh as root — it leaves root-owned files that" \
+    "break subsequent runs. Use these instead:" \
+    "  ./start.sh --setcap          # grant capture caps (uses sudo internally)" \
+    "  ./start.sh                   # start as your normal user" \
+    "  ./start.sh --iface wlp14s0u2 # override capture interface" >&2
+  # If .run/ already has root-owned files, offer the fix
+  if find "$ROOT/.run" -user root -print -quit 2>/dev/null | grep -q .; then
+    printf '\033[33m%s\033[0m\n' \
+      "" \
+      "To fix existing root-owned files:" \
+      "  sudo chown -R \$(id -un):\$(id -gn) $ROOT/.run $ROOT/data" >&2
+  fi
+  exit 1
+fi
+
 AGENT_PORT="${AGENT_PORT:-8080}"
 GUI_PORT="${GUI_PORT:-8081}"
 WEB_DEV_PORT="${WEB_DEV_PORT:-5173}"
@@ -86,20 +108,47 @@ done
 
 # ------------------------------------------------------------------ preflight
 
+# Detect the package manager once; used in install hints.
+if command -v pacman >/dev/null 2>&1; then
+  _PM=pacman
+elif command -v dnf >/dev/null 2>&1; then
+  _PM=dnf
+else
+  _PM=apt
+fi
+
 # need_tool reports a missing tool with the exact command that installs it,
 # rather than letting make fail 40 lines later with a bare "not found".
 need_tool() {
-  local tool="$1" hint="$2"
+  local tool="$1" hint_apt="$2" hint_pacman="${3:-}" hint_dnf="${4:-}"
   command -v "$tool" >/dev/null && return 0
+  local hint
+  case "$_PM" in
+    pacman) hint="${hint_pacman:-$hint_apt}" ;;
+    dnf)    hint="${hint_dnf:-$hint_apt}" ;;
+    *)      hint="$hint_apt" ;;
+  esac
   die "$tool not found — install it with: $hint"
 }
 
 preflight() {
-  need_tool go   "https://go.dev/dl/  (BeeEye needs Go ≥ 1.25)"
-  need_tool npm  "apt install nodejs npm   (Node ≥ 18)"
-  need_tool clang "apt install clang"
+  need_tool go \
+    "https://go.dev/dl/  (BeeEye needs Go ≥ 1.25)" \
+    "pacman -S go" \
+    "dnf install golang"
+  need_tool npm \
+    "apt install nodejs npm   (Node ≥ 18)" \
+    "pacman -S nodejs npm" \
+    "dnf install nodejs npm"
+  need_tool clang \
+    "apt install clang" \
+    "pacman -S clang" \
+    "dnf install clang"
   if [[ ! -f "$ROOT/BeeEye-agent/bpf/vmlinux.h" ]]; then
-    need_tool bpftool "apt install linux-tools-common linux-tools-\$(uname -r)"
+    need_tool bpftool \
+      "apt install linux-tools-common linux-tools-\$(uname -r)" \
+      "pacman -S bpf" \
+      "dnf install bpftool"
     [[ -r /sys/kernel/btf/vmlinux ]] ||
       die "/sys/kernel/btf/vmlinux missing — this kernel has no BTF, so CO-RE eBPF cannot be built here"
   fi
@@ -259,7 +308,14 @@ start_desktop() {
     echo "  desktop already running (pid $(cat "$pidfile"))"
     return 0
   fi
-  setsid "$DESKTOP_BIN" > "$RUN_DIR/desktop.log" 2>&1 &
+  # WebKitGTK's DMA-BUF renderer aborts with "Error 71 (Protocol error)
+  # dispatching to Wayland display" on several compositors (Hyprland, sway and
+  # other wlroots-based ones). Disabling it costs nothing here — the analyzer UI
+  # is 2D DOM, not a GPU-composited canvas — and is what upstream recommends
+  # until the WebKit side is fixed. Harmless on X11 and on compositors that
+  # never had the bug, so it is set unconditionally rather than sniffed for.
+  setsid env WEBKIT_DISABLE_DMABUF_RENDERER=1 "$DESKTOP_BIN" \
+    > "$RUN_DIR/desktop.log" 2>&1 &
   echo $! > "$pidfile"
   echo "  desktop started (pid $!) → $RUN_DIR/desktop.log"
 }
@@ -288,7 +344,13 @@ wait_healthy() {
 }
 
 cmd_setcap() {
-  command -v setcap >/dev/null || die "setcap not found — apt install libcap2-bin"
+  local setcap_hint
+  case "$_PM" in
+    pacman) setcap_hint="pacman -S libcap" ;;
+    dnf)    setcap_hint="dnf install libcap" ;;
+    *)      setcap_hint="apt install libcap2-bin" ;;
+  esac
+  command -v setcap >/dev/null || die "setcap not found — $setcap_hint"
   [[ -x "$BIN/BeeEye-agent" ]] || die "binaries not built yet — run ./start.sh first"
   bold "granting capture capabilities (sudo)"
   sudo setcap cap_net_raw,cap_net_admin+ep "$BIN/BeeEye-gui"
