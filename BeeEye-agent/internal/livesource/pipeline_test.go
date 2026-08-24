@@ -29,8 +29,8 @@ func TestIsWirelessAsksTheKernelNotTheName(t *testing.T) {
 		name := e.Name()
 		_, err := os.Stat("/sys/class/net/" + name + "/phy80211")
 		wireless := err == nil
-		if got := isWireless(name); got != wireless {
-			t.Errorf("isWireless(%q) = %v, want %v (per /sys/class/net/%s/phy80211)", name, got, wireless, name)
+		if got := IsWireless(name); got != wireless {
+			t.Errorf("IsWireless(%q) = %v, want %v (per /sys/class/net/%s/phy80211)", name, got, wireless, name)
 		}
 		if wireless {
 			sawWireless = true
@@ -51,8 +51,8 @@ func TestIsWirelessAsksTheKernelNotTheName(t *testing.T) {
 // on this machine at all, since a nonexistent path never has phy80211.
 func TestIsWirelessIgnoresName(t *testing.T) {
 	for _, name := range []string{"wlan-this-does-not-exist", "eth-also-fake", "ath0-fake", "ra0-fake"} {
-		if isWireless(name) {
-			t.Errorf("isWireless(%q) = true for an interface that does not exist", name)
+		if IsWireless(name) {
+			t.Errorf("IsWireless(%q) = true for an interface that does not exist", name)
 		}
 	}
 }

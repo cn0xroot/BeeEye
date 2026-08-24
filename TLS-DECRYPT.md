@@ -23,7 +23,17 @@
 
 **实测证据**：`TestCapturesRealTLSPlaintext` 在两个真实 openssl 进程间建立 TLS 会话，从 ringbuf 里捞回客户端写入的标记字符串。命令行工具对一次真实的 `curl https://example.com` 完整还原出 HTTP/2 请求前奏与返回的 `<!doctype html>...<title>Example Domain</title>`，带进程名与 pid。
 
-**尚未做**（与下文分阶段一致）：pcapng+DSB 导出（阶段二）、keylog 偏移表（阶段三）、GnuTLS/NSS/Go crypto/tls、以及接入分析器 UI 的「明文」面板。当前入口是独立命令行工具，这是**有意的隐私设计** —— 读取内容的功能不应常驻在分析器里。
+**阶段二（pcapng+DSB 导出）路径 B 部分已实现并实测通过。** 见 `internal/pcapfile/ngwriter.go` + `cmd/BeeEye-pcapmerge/`。
+
+**范围说明（重要，避免误解）**：pcapng 的 Decryption Secrets Block（DSB）能装的是"解密密钥"，不是"明文本身"。路径 B（`scripts/tls-decrypt.sh`）的 `SSLKEYLOGFILE` 输出正是标准 NSS keylog 格式的真实密钥材料，装进 DSB 是名副其实的。**路径 A（`BeeEye-tlspeek` uprobe）不产出任何密钥材料**——它直接从 `SSL_write`/`SSL_read` 抓的是明文缓冲区本身（"text 模式"），不是密钥推导，`internal/tlspeek/`里没有、也不该有 keylog 写出逻辑。所以 `BeeEye-pcapmerge` 只接受路径 B 的 `-keys`（SSLKEYLOGFILE 格式文件），**不适用于路径 A 的输出**——给路径 A 的明文伪造一行 keylog 会是虚假信号，这个仓库从不这么干（同样的原则见 `internal/identity`里 `DHCPParams` 字段的注释）。路径 A 的明文本来就已经是明文，不需要"能被 Wireshark 解密"这件事，它自己的消费方式是 `/api/plaintext` + `Plaintext.jsx` 面板，跟 pcapng+DSB 是两条不同的消费路径。
+
+**实现**：
+- `internal/pcapfile/ngwriter.go`：新增 `NgWriter`（pcapng 写入端，`pcapng.go` 里 `NgReader` 的对称实现），`WritePacket` 写 Enhanced Packet Block，`WriteSecrets` 写 Decryption Secrets Block。DSB 的 block type（`0x0000000A`）与 TLS keylog 的 secrets_type（`0x544c534b`，即 ASCII "TLSK"）取自 Wireshark 自己维护的 `wiretap/secrets-types.h`——pcapng 格式本身的 IETF 草案只定义了 DSB 这个容器，具体 secrets_type 的取值是 Wireshark 的私有登记表，不是 pcapng 规范的一部分。
+- `cmd/BeeEye-pcapmerge/`：独立命令行工具，`-pcap` + `-keys` → 一个 `.pcapng`。`make pcapmerge` 编译。`scripts/tls-decrypt.sh` 的 `capture`/`decrypt` 两个子命令收尾时自动调用（`merge_pcapng` 函数），找不到已编译的二进制时静默跳过、不影响原有 pcap+keys 两文件的产出。
+
+**实测**（非模拟，真实流量）：`curl https://example.com`（绕过系统代理，直连出口网卡）+ 真实 `tcpdump` 抓包 + 真实 `SSLKEYLOGFILE`，23 个真实包 + 5 行真实 TLS 1.3 密钥（`SERVER_HANDSHAKE_TRAFFIC_SECRET`/`CLIENT_TRAFFIC_SECRET_0` 等标准字段）合并成一个 `.pcapng`。`tshark -r merged.pcapng` **不指定任何外部 keylog 文件**，仅凭文件内嵌的 DSB 就还原出 `GET example.com /` 的真实 HTTP/2 请求头——这是解密链路本身生效的证据，不只是"文件能被解析"。对照组：把 keylog 换成一行垃圾数据重新合并，同样的 tshark 查询返回 0 条解密结果，排除了"其实没加密/巧合能读"的可能。
+
+**尚未做**：GnuTLS/NSS 的 keylog 提取（目前只有 OpenSSL/GnuTLS 的**明文直读**，两条库都没有走 keylog 路线）、Go crypto/tls（需 CO-RE + TC 五元组关联，见下文"待借鉴细节"）、路径 A 本身的 masterkey 偏移表（keylog 模式，eCapture 式的按版本偏移表，工程量大，仍未做——这条决定了路径 A 未来能不能也产出 DSB）、接入分析器 UI 的「明文」面板（`Plaintext.jsx` 已有按 pid 展示，流式关联仍偏弱，本轮未动）。当前入口是独立命令行工具，这是**有意的隐私设计** —— 读取内容的功能不应常驻在分析器里。
 
 **尚未改**：README 的「不解密 TLS」承诺还需按下文 §3 的要求改写为「不解密其他设备的 TLS」。
 

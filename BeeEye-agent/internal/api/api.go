@@ -25,6 +25,7 @@ import (
 	"BeeEye/internal/config"
 	"BeeEye/internal/detect"
 	"BeeEye/internal/geoip"
+	"BeeEye/internal/identity"
 	"BeeEye/internal/mitm"
 	"BeeEye/internal/model"
 	"BeeEye/internal/store"
@@ -160,6 +161,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/export", s.export)
 	mux.HandleFunc("GET /api/geoip", s.geoipLookup)
 	mux.HandleFunc("GET /api/geoip/status", s.geoipStatus)
+	mux.HandleFunc("GET /api/identity/status", s.identityStatus)
 
 	// Offline capture-file analysis.
 	mux.HandleFunc("POST /api/pcap/upload", s.pcapUpload)
@@ -676,6 +678,16 @@ func (s *Server) geoipStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, geoip.GetStatus())
 }
 
+// identityStatus reports whether device identification (F1) is running on
+// the built-in ~19-entry OUI table / ~40-entry hint table or a
+// downloaded/configured full one, same honesty convention as geoipStatus.
+func (s *Server) identityStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{
+		"oui":   identity.GetOUIStatus(),
+		"hints": identity.GetHintStatus(),
+	})
+}
+
 // timeseries buckets traffic over time for the trend chart (F7). Series are
 // split by the requested dimension so the chart legend can be localized from
 // enum keys rather than server-rendered labels (§3.8.1).
@@ -854,8 +866,20 @@ func (s *Server) pcapImport(w http.ResponseWriter, r *http.Request) {
 		writeErrStatus(w, http.StatusBadRequest, err)
 		return
 	}
-	defer file.Close()
-
+	// Deliberately no `defer file.Close()` here: (*fn) below (main's closure
+	// over livesource.ImportFile) hands file to a replay that keeps reading
+	// it from a goroutine which outlives this handler — see livefile.Open's
+	// own doc comment. A defer in this handler would close the underlying
+	// *os.File the moment this function returns, which for a large upload is
+	// while that background goroutine is still mid-replay: its next Read
+	// hits an already-closed file, which looks exactly like a truncated
+	// capture (pcapfile.ErrTruncated) and silently stops the import there —
+	// no error surfaces anywhere, replay just appears to have "finished"
+	// having actually read a small fraction of the file. Ownership of
+	// closing file passes to the importer instead: livefile.Open closes it
+	// itself on a synchronous open error, and its background goroutine
+	// closes it when replay actually reaches the real end (see
+	// livefile.source.run's own defer).
 	if err := (*fn)(file, hdr.Filename); err != nil {
 		writeErrStatus(w, http.StatusBadRequest, err)
 		return

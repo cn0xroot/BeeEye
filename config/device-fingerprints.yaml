@@ -1,0 +1,98 @@
+# 设备品类指纹特征表 (F1, program.md §3.5.2)
+#
+# 本地可编辑,按自己网络中观察到的厂商特征自行补充,无需重新编译。
+# 四张表分别对应四种被动信号来源,每张表内按顺序匹配、命中第一条即止,
+# 且只在"品类仍未知"时才生效——一次 OUI 命中或更靠前的信号永远不会被
+# 后面更弱的信号覆盖(与 internal/identity/identity.go 的 Identify() 逻辑一致)。
+#
+# match 是大小写不敏感的子串匹配;category 必须是以下取值之一:
+#   camera / lock / nas / router / tv / phone / laptop / speaker / fridge
+#
+# 留空此文件（或某个分区留空）不是错误——对应部分会保留内置的默认表,
+# 见 internal/identity/identity.go 顶部的 hostnameHints 等变量。
+
+# DHCP 主机名 / mDNS 广播名 子串 → 品类
+hostname:
+  - { match: cam,          category: camera }
+  - { match: ipc,          category: camera }
+  - { match: hikvision,    category: camera }
+  - { match: dahua,        category: camera }
+  - { match: ezviz,        category: camera }
+  - { match: xiaomi-cam,   category: camera }
+  - { match: doorbell,     category: camera }
+  - { match: lock,         category: lock }
+  - { match: door,         category: lock }
+  - { match: yale,         category: lock }
+  - { match: august,       category: lock }
+  - { match: nas,          category: nas }
+  - { match: synology,     category: nas }
+  - { match: qnap,         category: nas }
+  - { match: truenas,      category: nas }
+  - { match: router,       category: router }
+  - { match: gateway,      category: router }
+  - { match: openwrt,      category: router }
+  - { match: mesh,         category: router }
+  - { match: tv,           category: tv }
+  - { match: roku,         category: tv }
+  - { match: appletv,      category: tv }
+  - { match: chromecast,   category: tv }
+  - { match: firetv,       category: tv }
+  - { match: iphone,       category: phone }
+  - { match: android,      category: phone }
+  - { match: pixel,        category: phone }
+  - { match: huawei-p,     category: phone }
+  - { match: macbook,      category: laptop }
+  - { match: thinkpad,     category: laptop }
+  - { match: laptop,       category: laptop }
+  - { match: desktop-,     category: laptop }
+  - { match: -pc,          category: laptop }
+  - { match: echo,         category: speaker }
+  - { match: nest,         category: speaker }
+  - { match: homepod,      category: speaker }
+  - { match: sonos,        category: speaker }
+  - { match: xiaoai,       category: speaker }
+  - { match: fridge,       category: fridge }
+  - { match: refrigerator, category: fridge }
+
+# DHCP option 60 (Vendor Class Identifier) 子串 → 厂商(可选) + 品类
+vendor_class:
+  - { match: android-dhcp, category: phone }
+  - { match: "msft 5.0",   vendor: Microsoft,            category: laptop }
+  - { match: udhcp,        category: router }
+  - { match: hikvision,    vendor: Hangzhou Hikvision,    category: camera }
+  - { match: dahua,        vendor: Dahua Technology,      category: camera }
+  - { match: xiongmai,     vendor: XiongMai Technology,   category: camera }
+  - { match: tuya,         vendor: Tuya,                  category: speaker }
+  - { match: roku,         vendor: Roku,                  category: tv }
+  - { match: sonos,        vendor: Sonos,                 category: speaker }
+  - { match: synology,     vendor: Synology,              category: nas }
+  - { match: qnap,         vendor: QNAP,                  category: nas }
+
+# HTTP User-Agent 子串 → 品类(设备自己的 web-UI 心跳、固件检查等请求)
+user_agent:
+  - { match: iphone,       category: phone }
+  - { match: ipad,         category: phone }
+  - { match: android,      category: phone }
+  - { match: macintosh,    category: laptop }
+  - { match: "windows nt", category: laptop }
+  - { match: hikvision,    category: camera }
+  - { match: dahua,        category: camera }
+  - { match: dvrip,        category: camera }
+  - { match: ezviz,        category: camera }
+  - { match: tutk,         category: camera }
+  - { match: tuya,         category: speaker }
+  - { match: sonos,        category: speaker }
+  - { match: roku,         category: tv }
+  - { match: tizen,        category: tv }
+  - { match: webos,        category: tv }
+
+# SSDP Server: 头子串 → 品类(UPnP 设备发现响应)
+ssdp_server:
+  - { match: synology,     category: nas }
+  - { match: qnap,         category: nas }
+  - { match: dlna,         category: tv }
+  - { match: sonos,        category: speaker }
+  - { match: roku,         category: tv }
+  - { match: samsung,      category: tv }
+  - { match: lg,           category: tv }
+  - { match: philips-hue,  category: speaker }

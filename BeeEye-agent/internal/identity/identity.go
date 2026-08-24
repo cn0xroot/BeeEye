@@ -1,8 +1,19 @@
-// Package identity performs passive device identification (program.md §3.5.2).
+// Package identity performs passive device identification (program.md §3.5.2,
+// F1).
 //
-// Signals combined here: MAC OUI prefix (vendor), plus DHCP/mDNS/SSDP hints
-// passed in as a hostname string. The full Fingerbank dataset is out of scope
-// for the slice; a compact built-in OUI table demonstrates the mechanism.
+// Signals combined here: MAC OUI prefix (vendor), plus DHCP/mDNS/SSDP/HTTP
+// hints. Fingerbank itself is a paid online API, which conflicts with this
+// project's 100%-offline privacy requirement (§3.9, already enforced the
+// same way in internal/geoip) — so instead of calling it, this package does
+// Fingerbank-style *passive* matching entirely from local data: vendor
+// resolution against the optional full IEEE OUI registry (see oui.go,
+// LoadOUI — ~50k entries once downloaded via
+// scripts/fingerprint-setup.sh, vs. the ~19-entry built-in table below),
+// and category/model refinement against a user-editable hint table (see
+// hints.go, LoadHints, config/device-fingerprints.yaml — same convention as
+// internal/protocol's port→service map). Neither ever performs a per-lookup
+// network call; both degrade to the small built-in tables in this file when
+// no external file is present.
 package identity
 
 import (
@@ -144,8 +155,15 @@ type Fingerprint struct {
 func Identify(mac, hostname string, fp Fingerprint) Result {
 	r := Result{Vendor: "Unknown", ModelGuess: "", Category: model.CatUnknown}
 	prefix := normalizeOUI(mac)
+	// lookupVendor checks the optional full IEEE registry (once loaded via
+	// LoadOUI) before the built-in table — see oui.go. Only the built-in
+	// table's illustrative entries also carry a category/model guess; a
+	// full-registry hit still relies on the hint tables below to refine
+	// category, same as an OUI miss does today.
+	if vendor, ok := lookupVendor(prefix); ok {
+		r.Vendor = vendor
+	}
 	if info, ok := ouiTable[prefix]; ok {
-		r.Vendor = info.vendor
 		r.ModelGuess = info.model
 		r.Category = info.category
 	}

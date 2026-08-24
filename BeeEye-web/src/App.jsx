@@ -14,6 +14,34 @@ import ErrorBoundary from './components/ErrorBoundary'
 // than "how is the house doing right now".
 const FILTERED = new Set(['connections', 'byIp', 'byProtocol'])
 
+const SEEN_IMPORTS_KEY = 'beeeye.seenImports'
+
+// localStorage-backed, so "already offered" survives a page reload — see
+// seenImportsRef's own comment for why this can't just be an in-memory ref.
+// Wrapped in try/catch: private browsing or a storage-blocking policy must
+// not break importing, just fall back to "nothing persists, re-offer every
+// page load" (matches this feature's pre-existing behavior before it did).
+function loadSeenImports() {
+  try {
+    const raw = localStorage.getItem(SEEN_IMPORTS_KEY)
+    if (raw) return new Set(JSON.parse(raw))
+  } catch { /* ignore */ }
+  return new Set()
+}
+
+function saveSeenImports(seen) {
+  try { localStorage.setItem(SEEN_IMPORTS_KEY, JSON.stringify([...seen])) } catch { /* ignore */ }
+}
+
+// A row only counts as a real "just imported" signal if imported_at is a
+// real timestamp — the server only sets it on POST /api/pcap/import within
+// its own current process lifetime (see api.go's importedAt map), so a row
+// imported before the agent's last restart reports the Go zero time
+// instead, which parses to a large negative epoch offset here.
+function hasRealImportedAt(b) {
+  return b.imported_at ? new Date(b.imported_at).getTime() > 0 : false
+}
+
 export default function App() {
   const { t } = useTranslation()
   const [theme, setTheme, resolvedTheme] = useTheme()
@@ -44,6 +72,14 @@ export default function App() {
   // happens once per import — the user clearing it (back to live) must
   // stick, not get fought by the next poll re-noticing the same import.
   const autoScopedRef = useRef(null)
+  // ifaces already offered as an auto-scope target, persisted across page
+  // loads/reloads (see loadSeenImports below) — not just "this render", and
+  // not bounded by how long ago the import happened. Importing happens from
+  // the analyzer, a separate page/port (F42): the user may open the overview
+  // tab seconds or many minutes after that POST landed, or may not have had
+  // it open at all yet, so there is no wall-clock window that reliably
+  // covers "did the user already get offered a jump to this import".
+  const seenImportsRef = useRef(null)
 
   const loadCore = useCallback(async () => {
     try {
@@ -86,17 +122,24 @@ export default function App() {
       api.protocolView(importScope).then(setProtoRows).catch(() => setProtoRows([]))
       api.pcapImports().then((rows) => {
         setImports(rows || [])
-        // Fresh = accepted in the last 90s (imported_at is wall-clock import
-        // time, not the file's own packet timestamps — a historical capture
-        // can be months old and still count as "just imported").
-        const fresh = (rows || []).find((b) => {
-          if (!b.imported_at) return false
-          return Date.now() - new Date(b.imported_at).getTime() < 90_000
-        })
-        if (fresh && autoScopedRef.current !== fresh.iface) {
-          autoScopedRef.current = fresh.iface
-          setImportScope(fresh.iface)
+        if (seenImportsRef.current === null) seenImportsRef.current = loadSeenImports()
+        const seen = seenImportsRef.current
+        const candidates = (rows || []).filter((b) => !seen.has(b.iface) && hasRealImportedAt(b))
+        if (candidates.length > 0) {
+          const target = candidates.reduce((a, b) =>
+            new Date(b.imported_at) > new Date(a.imported_at) ? b : a)
+          if (autoScopedRef.current !== target.iface) {
+            autoScopedRef.current = target.iface
+            setImportScope(target.iface)
+          }
         }
+        // Every iface seen this poll is "offered" from here on, whether or
+        // not it won the pick above — otherwise a second, newer import
+        // arriving next poll would flip-flop the scope back to a candidate
+        // that already lost once.
+        const ifaces = rows || []
+        ifaces.forEach((b) => seen.add(b.iface))
+        saveSeenImports(seen)
       }).catch(() => {})
     }
     loadExtras()

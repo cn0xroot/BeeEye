@@ -31,6 +31,7 @@ import (
 	"BeeEye/internal/config"
 	"BeeEye/internal/detect"
 	"BeeEye/internal/geoip"
+	"BeeEye/internal/identity"
 	"BeeEye/internal/live"
 	"BeeEye/internal/livesource"
 	"BeeEye/internal/mitm"
@@ -43,15 +44,17 @@ import (
 
 // captureIface picks the interface to capture on. Names are never hardcoded
 // (F16): it takes the first configured interface that actually exists on this
-// host, and when none do — the shipped config lists wlan0/eth0, which many
-// machines do not have — it falls back to the interface carrying the default
-// route, and finally to "any". Without this, a config that does not match the
+// host, or — when its exact name does not (see resolveExplicitInterface) — a
+// real interface on this host matching its configured role, and when neither
+// finds anything it falls back to the interface carrying the default route,
+// and finally to "any". Without this, a config that does not match the
 // hardware would silently drop the agent back to simulated data.
 func captureIface(cfg *config.Config) string {
 	if cfg.Interfaces.Mode == "explicit" {
+		ifs, _ := net.Interfaces() // nil on error: the loop below just finds nothing, same as today
 		for _, e := range cfg.Interfaces.ExplicitList {
-			if _, err := net.InterfaceByName(e.Name); err == nil {
-				return e.Name
+			if dev := resolveExplicitInterface(e, ifs); dev != "" {
+				return dev
 			}
 		}
 	} else if cfg.Interfaces.Mode == "auto" {
@@ -63,6 +66,45 @@ func captureIface(cfg *config.Config) string {
 		return dev
 	}
 	return live.AnyInterface
+}
+
+// resolveExplicitInterface finds a real host interface for one configured
+// explicit_list entry (F16/F20). Every machine's kernel names its interfaces
+// differently — wlan0 vs wlp3s0 vs wlp14s0u2, eth0 vs enp2s0 vs eno1, an old
+// driver's own ath0/ra0 — which is exactly why config.yaml has needed
+// hand-editing per machine before this (see v1.3.2's Arch-specific fix).
+//
+// The configured Name wins outright when it exists on this host: an operator
+// who has already set the right name for their hardware is never
+// second-guessed. When it does not, Role narrows the search to a real
+// candidate: wifi_ap must be an actual 802.11 device — asked of the kernel via
+// livesource.IsWireless (/sys/class/net/<iface>/phy80211), not guessed from
+// the name — and wan_uplink must not be. An empty Role, an unrecognized one,
+// or no matching interface at all returns "", the same "try the next
+// configured entry, then fall back further" contract captureIface already had.
+func resolveExplicitInterface(e config.Interface, ifs []net.Interface) string {
+	for _, i := range ifs {
+		if i.Name == e.Name {
+			return i.Name
+		}
+	}
+	for _, i := range ifs {
+		if i.Flags&net.FlagLoopback != 0 || i.Flags&net.FlagUp == 0 {
+			continue
+		}
+		wireless := livesource.IsWireless(i.Name)
+		switch e.Role {
+		case "wifi_ap":
+			if wireless {
+				return i.Name
+			}
+		case "wan_uplink":
+			if !wireless {
+				return i.Name
+			}
+		}
+	}
+	return ""
 }
 
 // autoDiscoverIface implements interfaces.mode: auto (F16/F20): the interface
@@ -254,6 +296,15 @@ func main() {
 	// Load an offline GeoIP database if one is present, for accurate country /
 	// province / city / operator (F22). Falls back to the built-in table.
 	geoip.Load("", "")
+
+	// user-editable device-category hint table (F1); missing file keeps the
+	// built-in defaults, same contract as LoadPortServiceMap above.
+	if err := identity.LoadHints(cfg.DeviceFingerprintFile); err != nil {
+		log.Fatalf("load device fingerprint hints: %v", err)
+	}
+	// Optional full IEEE OUI registry (F1); missing file keeps the built-in
+	// ~19-entry vendor table. Never a network call — see internal/identity/oui.go.
+	identity.LoadOUI(cfg.OUIDatabaseFile)
 
 	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0o755); err != nil {
 		log.Fatalf("mkdir data: %v", err)

@@ -4,6 +4,19 @@ All notable changes to BeeEye are documented in this file.
 
 [中文](CHANGELOG.zh-CN.md)
 
+## [1.4.0] — 2026-08-23
+
+### Added
+
+- **Device identification (F1): full IEEE OUI registry + user-editable category hints, both offline.** Fingerbank itself is a paid online API, which conflicts with this project's no-per-lookup-network-call privacy rule (already enforced in `internal/geoip`) — so instead `internal/identity` gained an optional full ~50k-entry IEEE vendor table (`scripts/fingerprint-setup.sh fetch-oui`, same "download once, then 100% local" pattern as `geoip-setup.sh`) and a local, user-editable `config/device-fingerprints.yaml` for category/model hints, replacing the previous ~19-entry built-in table as the only option. Both degrade cleanly to the old built-in tables when absent.
+- **TLS plaintext capture (F14), phase two: pcapng + Decryption Secrets Block export.** `internal/pcapfile`'s new `NgWriter` and `cmd/BeeEye-pcapmerge` combine a `.pcap` and an SSLKEYLOGFILE-format key log into one Wireshark-openable `.pcapng` (`scripts/tls-decrypt.sh` now calls this automatically); verified against a real capture + real keys, decrypting a genuine HTTP/2 request with no external keylog file referenced.
+- **TLS plaintext capture (F14): real TLS 1.2 master-secret extraction for OpenSSL 3.0.x**, so the always-on uprobe path can now produce a real Decryption Secrets Block too, not only the SSLKEYLOGFILE-cooperative path. `bpf/BeeEye_tls.bpf.c` reads `client_random`/`master_key` off the `SSL`/`SSL_SESSION` structs at byte offsets computed from OpenSSL's own source (not guessed), gated on the exact TLS-1.2 master-secret length so nothing wrong-length is ever reported. Kept in memory only (`GET /api/plaintext/keylog`, fetched on demand — never written to disk automatically, the same rule `internal/mitm`'s decrypted-exchange store already follows). Verified against a real, non-SSLKEYLOGFILE `curl` connection: the extracted secret decrypted the real page body.
+- **Interface auto-detection now matches by role, not just by exact name (F16).** Every machine's kernel names interfaces differently (`wlan0` vs `wlp3s0` vs `wlp14s0u2`, `eth0` vs `enp2s0` vs `eno1`), which used to mean a config that did not name-match your hardware silently skipped that entry entirely. `resolveExplicitInterface` now falls back, when the configured name is absent, to a real host interface matching that entry's `role` — `wifi_ap` via a real kernel-level wireless check (`livesource.IsWireless`, `/sys/class/net/<iface>/phy80211`, independent of naming convention), `wan_uplink` via the same check's negation. The exact configured name still always wins first.
+
+### Fixed
+
+- **World map showed no points after opening an offline capture, if the overview tab wasn't already open at the moment of import**: the overview auto-scopes the world map to a just-imported file so its (usually old) timestamps aren't crowded out of the default live/recency view — but that only worked if `imported_at` was within the last 90 seconds of whenever the overview's poll loop happened to run, which fails the moment importing (done from the analyzer, a separate page/port, F42) and looking at the overview aren't the same continuous browser action — importing a large file, then switching tabs to check, easily exceeds that window, after which the map silently stays on "live" scope forever with nothing to auto-recover it. Replaced the wall-clock window with a `localStorage`-backed "already offered" set (`BeeEye-web/src/App.jsx`): any import not yet seen, with a real (non-zero) `imported_at`, gets auto-scoped to on the next poll — no time bound, and it survives page reloads, so opening the overview tab any amount of time after an import still jumps the map to it.
+
 ## [1.3.1] — 2026-08-22
 
 ### Removed

@@ -101,6 +101,11 @@ tlspeek: bpf ## Build the TLS plaintext capture tool (F14; gateway-local only)
 	@echo "  sudo setcap cap_bpf,cap_perfmon+ep $(BIN)/BeeEye-tlspeek"
 	@echo "then: $(BIN)/BeeEye-tlspeek -list"
 
+.PHONY: pcapmerge
+pcapmerge: ## Build the capture+keylog merge tool (F14 phase two: one pcapng file, not two)
+	cd $(AGENT_DIR) && $(GO) build -o bin/BeeEye-pcapmerge ./cmd/BeeEye-pcapmerge
+	@ls -la $(BIN)/BeeEye-pcapmerge
+
 .PHONY: build-cuda
 build-cuda: bpf cuda ## Build the analyzer and the overview agent with the CUDA renderer linked in
 	cd $(AGENT_DIR) && CGO_ENABLED=1 $(GO) build -tags cuda -o bin/BeeEye-gui-cuda ./cmd/BeeEye-gui

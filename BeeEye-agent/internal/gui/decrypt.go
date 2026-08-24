@@ -10,6 +10,19 @@ import (
 	"BeeEye/internal/tlspeek"
 )
 
+// keylogCap bounds how many master-secret lines Decryptor keeps in memory
+// (F14 phase two). Deliberately NOT written to disk automatically: unlike a
+// plaintext HTTP body, a keylog line stays usable to decrypt captured
+// traffic for as long as anyone holds it, and this codebase's established
+// rule for exactly that shape of data (see internal/mitm's exchange store,
+// which is the same in-memory-ring-never-persisted pattern) is to keep it
+// in memory, cleared on Disable/restart, and hand it out only through an
+// explicit fetch (GET /api/plaintext/keylog) — never write it to a file the
+// operator didn't ask for. A user who wants it paired with a pcap saves the
+// response themselves and feeds it to BeeEye-pcapmerge, same as
+// scripts/tls-decrypt.sh's own keys-*.log is an explicit, opt-in artifact.
+const keylogCap = 2000
+
 // decryptRingPerPID caps how many decrypted chunks are kept per process, so a
 // busy process cannot evict everything else and memory stays bounded.
 const decryptRingPerPID = 200
@@ -62,6 +75,7 @@ type Decryptor struct {
 	attached int
 	lastErr  string
 	stop     chan struct{}
+	keylog   []string // NSS keylog lines, in memory only — see keylogCap
 }
 
 func NewDecryptor() *Decryptor {
@@ -81,12 +95,31 @@ type DecryptStatus struct {
 	Running  bool   `json:"running"`
 	Attached int    `json:"attached"` // number of libraries probed
 	Error    string `json:"error,omitempty"`
+	// Keylogged is how many real TLS 1.2 master secrets are held in memory
+	// this run (F14 phase two, GET /api/plaintext/keylog to fetch them) —
+	// 0 either means no TLS 1.2 traffic happened yet, or every attached
+	// library's OpenSSL version has no measured offset row (see
+	// tlspeek/masterkey.go), which is the common case today: only OpenSSL
+	// 3.0.x is covered.
+	Keylogged int `json:"keylogged"`
 }
 
 func (d *Decryptor) Status() DecryptStatus {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return DecryptStatus{Enabled: d.enabled, Running: d.running, Attached: d.attached, Error: d.lastErr}
+	return DecryptStatus{Enabled: d.enabled, Running: d.running, Attached: d.attached, Error: d.lastErr, Keylogged: len(d.keylog)}
+}
+
+// Keylog returns the master-secret lines captured this run, in standard NSS
+// keylog format (one CLIENT_RANDOM line per line) — see keylogCap's doc
+// comment for why this is the only way to get them out, never a file
+// written automatically.
+func (d *Decryptor) Keylog() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]string, len(d.keylog))
+	copy(out, d.keylog)
+	return out
 }
 
 // Enable starts decryption: load the uprobe programs and attach them to every
@@ -118,6 +151,7 @@ func (d *Decryptor) Disable() {
 		d.stop = nil
 	}
 	d.byPID = map[int][]PlaintextChunk{}
+	d.keylog = nil
 	d.mu.Unlock()
 	if peeker != nil {
 		peeker.Close()
@@ -188,7 +222,14 @@ func (d *Decryptor) attachAll(peeker *tlspeek.Peeker, libs []tlspeek.Library) (t
 		}
 		if err := peeker.Attach(lib.Path, 0); err != nil {
 			log.Printf("gui: attach %s (%s): %v", lib.Path, lib.Family, err)
+			continue
 		}
+		// Best-effort, additive: registers master-key extraction (F14
+		// phase two) for this library's pids when its exact OpenSSL
+		// version has a measured offset row, else does nothing — plaintext
+		// capture above is unaffected either way.
+		version := tlspeek.LibraryVersion(lib.Path, lib.Family)
+		peeker.AttachMasterKey(lib.Family, version, lib.PIDs)
 	}
 	total = len(peeker.Targets())
 	gained = total - before
@@ -263,6 +304,10 @@ func (d *Decryptor) drain(events <-chan *tlspeek.Event, stop <-chan struct{}) {
 }
 
 func (d *Decryptor) record(ev *tlspeek.Event) {
+	if ev.Dir == tlspeek.DirKeylog {
+		d.recordKeylog(ev)
+		return
+	}
 	chunk := PlaintextChunk{
 		TimeMS:    time.Now().UnixMilli(),
 		PID:       int(ev.PID),
@@ -282,6 +327,29 @@ func (d *Decryptor) record(ev *tlspeek.Event) {
 		ring = ring[len(ring)-decryptRingPerPID:]
 	}
 	d.byPID[chunk.PID] = ring
+}
+
+// recordKeylog keeps one real master-secret line in memory (F14 phase two).
+// Kept entirely separate from the plaintext-chunk ring in record(): a keylog
+// line is key material, not application content, and must never be rendered
+// through Recent()/escapePreview() as if it were a captured HTTP body — that
+// would be shipping the secret itself to the browser instead of what it
+// decrypts. See keylogCap's doc comment for why this never touches disk on
+// its own.
+func (d *Decryptor) recordKeylog(ev *tlspeek.Event) {
+	line, ok := ev.KeylogLine()
+	if !ok {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.enabled {
+		return
+	}
+	d.keylog = append(d.keylog, line)
+	if len(d.keylog) > keylogCap {
+		d.keylog = d.keylog[len(d.keylog)-keylogCap:]
+	}
 }
 
 // Recent returns the most recent decrypted chunks. pid > 0 restricts to one

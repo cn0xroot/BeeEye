@@ -34,8 +34,34 @@
 
 /* Which side of the library call the plaintext came from. */
 enum BeeEye_tls_dir {
-	TLS_DIR_WRITE = 0, /* SSL_write: plaintext on its way out, pre-encryption */
-	TLS_DIR_READ = 1,  /* SSL_read: plaintext after decryption */
+	TLS_DIR_WRITE = 0,  /* SSL_write: plaintext on its way out, pre-encryption */
+	TLS_DIR_READ = 1,   /* SSL_read: plaintext after decryption */
+	/* TLS 1.2 master-secret keylog record — see BeeEye_ssl_offsets below.
+	 * data[] carries a fixed 88-byte payload, not application content:
+	 *   [0:32)  client_random (SSL3_RANDOM_SIZE)
+	 *   [32:40) master_key_length as little-endian u64 (always 48 when
+	 *           this fires — see the length check in the probe)
+	 *   [40:88) master_key (SSL3_MASTER_SECRET_SIZE, zero-padded to 48
+	 *           if a shorter length were ever seen — it never is today)
+	 * len/orig_len are both 88 for this direction. */
+	TLS_DIR_KEYLOG = 2,
+};
+
+/* Per-process struct-field offsets needed to read the TLS 1.2 master secret
+ * out of an `SSL *`, computed once in userspace (internal/tlspeek/masterkey.go)
+ * from the exact OpenSSL version string embedded in the library — see that
+ * file's doc comment for why this can't be CO-RE (no BTF in release .so
+ * builds) and why it's scoped to TLS 1.2 (a TLS 1.3 secret's length depends on
+ * the negotiated cipher's hash, which needs a second lookup this table does
+ * not yet carry). All offsets are relative to the `SSL *` uprobe argument
+ * except master_key_len_off/master_key_off, which are relative to the
+ * `SSL_SESSION *` read from session_off.
+ */
+struct BeeEye_ssl_offsets {
+	__u32 session_off;        /* offsetof(struct ssl_st, session) */
+	__u32 client_random_off;  /* offsetof(struct ssl_st, s3.client_random) */
+	__u32 master_key_len_off; /* offsetof(struct ssl_session_st, master_key_length) */
+	__u32 master_key_off;     /* offsetof(struct ssl_session_st, master_key) */
 };
 
 /* One captured plaintext chunk.

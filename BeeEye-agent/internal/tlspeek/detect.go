@@ -73,6 +73,14 @@ var versionMarkers = map[string][]byte{
 	"GnuTLS":  []byte("GnuTLS "),
 }
 
+// LibraryVersion reports the same version banner Detect()'s CryptoLib.Version
+// carries, for a caller (Peeker.AttachMasterKey) that already has a library
+// path and family and wants just the version string without re-running a
+// full Detect() survey.
+func LibraryVersion(path, family string) string {
+	return readVersionString(path, family)
+}
+
 // readVersionString scans the library's readable data for its embedded
 // version banner. Best-effort: a stripped or unusually built library may not
 // carry one, in which case the family is still known (from the SONAME) even
