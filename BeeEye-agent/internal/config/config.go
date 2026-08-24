@@ -80,6 +80,13 @@ type Config struct {
 	// PortServiceMapFile points at the user-editable port→service table (F24,
 	// §3.5.4). Empty means "use the built-in defaults".
 	PortServiceMapFile string `yaml:"port_service_map_file"`
+	// DeviceFingerprintFile points at the user-editable device-category hint
+	// table (F1). Empty means "use the built-in defaults".
+	DeviceFingerprintFile string `yaml:"device_fingerprint_file"`
+	// OUIDatabaseFile points at a downloaded IEEE OUI registry CSV (F1).
+	// Empty means "auto-discover ./data/oui.csv, else use the built-in
+	// ~19-entry table" — see internal/identity.LoadOUI.
+	OUIDatabaseFile string `yaml:"oui_database_file"`
 }
 
 // Default returns a config populated with the program.md baseline values.

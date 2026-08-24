@@ -80,6 +80,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/decrypt", s.decryptStatus)
 	mux.HandleFunc("POST /api/decrypt", s.decryptToggle)
 	mux.HandleFunc("GET /api/plaintext", s.plaintext)
+	mux.HandleFunc("GET /api/plaintext/keylog", s.plaintextKeylog)
 	mux.HandleFunc("GET /api/decrypt/libs", s.decryptLibs)
 	mux.Handle("/", s.spa())
 	return withCORS(mux)
@@ -763,6 +764,22 @@ func (s *Server) plaintext(w http.ResponseWriter, r *http.Request) {
 		"status": s.decrypt.Status(),
 		"chunks": s.decrypt.Recent(pid, limit),
 	})
+}
+
+// plaintextKeylog returns the real TLS 1.2 master-secret lines captured this
+// run, in standard NSS keylog format — one CLIENT_RANDOM line per line, the
+// same shape scripts/tls-decrypt.sh already writes to its own keys-*.log
+// files, so this response can be saved and fed straight to BeeEye-pcapmerge
+// -keys alongside a pcap. Plain text, not JSON: it is meant to be saved
+// as-is. See gui.keylogCap's doc comment for why this is fetched on demand
+// rather than ever written to disk automatically.
+func (s *Server) plaintextKeylog(w http.ResponseWriter, r *http.Request) {
+	lines := s.decrypt.Keylog()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="keys-agent.log"`)
+	for _, l := range lines {
+		fmt.Fprintln(w, l)
+	}
 }
 
 // decryptLibs surveys the crypto libraries on this host and whether uprobe

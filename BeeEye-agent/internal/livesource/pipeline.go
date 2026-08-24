@@ -421,7 +421,7 @@ func (p *Pipeline) ingestDNS(r *dissect.Result, srcMAC, dstMAC string) {
 func (p *Pipeline) seeDevice(mac, ip, iface string, ts time.Time) {
 	d := p.devices[mac]
 	if d == nil {
-		d = &deviceSeen{ip: ip, iface: iface, firstTS: ts, wireless: isWireless(iface)}
+		d = &deviceSeen{ip: ip, iface: iface, firstTS: ts, wireless: IsWireless(iface)}
 		p.devices[mac] = d
 	}
 	if ip != "" {
@@ -449,7 +449,7 @@ func (p *Pipeline) seeFingerprint(mac string, r *dissect.Result) {
 	}
 	d := p.devices[mac]
 	if d == nil {
-		d = &deviceSeen{iface: r.Iface, firstTS: r.TS, wireless: isWireless(r.Iface)}
+		d = &deviceSeen{iface: r.Iface, firstTS: r.TS, wireless: IsWireless(r.Iface)}
 		p.devices[mac] = d
 	}
 	changed := false
@@ -654,7 +654,7 @@ func detailKey(d map[string]any) string {
 	return b.String()
 }
 
-// isWireless asks the kernel, not the interface's own name. A name-based
+// IsWireless asks the kernel, not the interface's own name. A name-based
 // guess ("starts with wl", "contains wlan") only covers the common systemd
 // predictable-naming and legacy wlanN cases — it misclassifies a renamed
 // interface (a custom udev rule, a distro that never adopted predictable
@@ -663,8 +663,12 @@ func detailKey(d map[string]any) string {
 // user's very well might. /sys/class/net/<iface>/phy80211 is the same
 // naming-agnostic signal `iw dev` itself uses to enumerate wireless
 // interfaces — present for any 802.11 interface regardless of what it is
-// called, absent for everything else.
-func isWireless(iface string) bool {
+// called, absent for everything else. Exported so main.go's interface-role
+// resolution (F16: an explicit config entry whose configured name does not
+// exist on this host) can reuse the exact same signal this package already
+// uses for the device access-type label, instead of guessing from name
+// prefixes.
+func IsWireless(iface string) bool {
 	_, err := os.Stat("/sys/class/net/" + iface + "/phy80211")
 	return err == nil
 }

@@ -61,6 +61,29 @@ USAGE
 
 need() { command -v "$1" >/dev/null || die "$1 not found — install it first ($2)"; }
 
+PCAPMERGE_BIN="$ROOT/BeeEye-agent/bin/BeeEye-pcapmerge"
+
+# merge_pcapng combines pcap+keys into one Wireshark-openable .pcapng carrying
+# an embedded Decryption Secrets Block (F14 phase two), so a capture handed to
+# someone else doesn't need its key log pointed at separately in Wireshark's
+# preferences. Best-effort: a missing BeeEye-pcapmerge binary (not built via
+# `make pcapmerge`) just means this step is skipped, not a hard failure — the
+# separate pcap+keys files this script has always produced are still there
+# and still work with `decrypt` / a manual `-o tls.keylog_file:`.
+merge_pcapng() {
+  local pcap="$1" keys="$2"
+  if [[ ! -x "$PCAPMERGE_BIN" ]]; then
+    dim "  (skipping merged .pcapng — build it once with: make pcapmerge)"
+    return 0
+  fi
+  local out="${pcap%.pcap}.pcapng"
+  if "$PCAPMERGE_BIN" -pcap "$pcap" -keys "$keys" -out "$out" >/dev/null 2>&1; then
+    dim "  merged : $out (capture + keys in one file — open this in Wireshark)"
+  else
+    warn "  BeeEye-pcapmerge failed — falling back to the separate pcap+keys files"
+  fi
+}
+
 default_iface() {
   ip -o route get 1.1.1.1 2>/dev/null \
     | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1
@@ -166,6 +189,7 @@ Was it already running? SSLKEYLOGFILE only applies to a fresh launch."
   echo
   dim "saved: $pcap"
   dim "       $keys"
+  merge_pcapng "$pcap" "$keys"
   dim "re-run just the decode with:  ./scripts/tls-decrypt.sh decrypt --pcap $pcap --keys $keys"
 }
 
@@ -185,6 +209,8 @@ cmd_decrypt() {
   [[ -n "$pcap" && -f "$pcap" ]] || die "no pcap given and none found in $OUT_DIR"
   [[ -n "$keys" && -f "$keys" ]] || die "no key log given and none found in $OUT_DIR"
   decrypt_pcap "$pcap" "$keys" "$filter"
+  echo
+  merge_pcapng "$pcap" "$keys"
 }
 
 # decrypt_pcap is the one place tshark is invoked, so the two entry points

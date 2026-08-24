@@ -65,3 +65,11 @@ mitm:
 
 # 知名端口 → 服务名映射 (F24, §3.5.4)。留空则用内置默认表。
 port_service_map_file: "./config/port-service-map.yaml"
+
+# 设备指纹品类特征表 (F1)。留空则用内置默认表(约 40 条)。
+device_fingerprint_file: "./config/device-fingerprints.yaml"
+
+# IEEE OUI 厂商前缀全量表,一次性离线下载(不联网单次查询,见 §3.9)。
+# 留空则自动探测 ./data/oui.csv,找不到就用内置约 19 条的示例表。
+# 运行 ./scripts/fingerprint-setup.sh fetch-oui 获取约 5 万条完整厂商表。
+oui_database_file: ""

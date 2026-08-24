@@ -26,10 +26,11 @@ import (
 )
 
 const (
-	blockTypeSectionHeader  = 0x0A0D0D0A
-	blockTypeInterfaceDesc  = 0x00000001
-	blockTypeSimplePacket   = 0x00000003
-	blockTypeEnhancedPacket = 0x00000006
+	blockTypeSectionHeader     = 0x0A0D0D0A
+	blockTypeInterfaceDesc     = 0x00000001
+	blockTypeSimplePacket      = 0x00000003
+	blockTypeEnhancedPacket    = 0x00000006
+	blockTypeDecryptionSecrets = 0x0000000A
 
 	sectionHeaderMagicLE = 0x1A2B3C4D
 	sectionHeaderMagicBE = 0x4D3C2B1A // the same 4 bytes read the other way round

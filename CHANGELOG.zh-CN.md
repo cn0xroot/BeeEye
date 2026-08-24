@@ -4,6 +4,19 @@
 
 [English](CHANGELOG.md)
 
+## [1.4.0] — 2026-08-23
+
+### 新增
+
+- **设备识别（F1）：接入完整 IEEE OUI 全量表 + 本地可编辑品类特征表，全部离线。** Fingerbank 本身是付费在线 API，跟本项目"绝不对外发起单次查询"的隐私底线（`internal/geoip` 已经在贯彻）直接冲突——于是 `internal/identity` 改为接入一份可选的约 5 万条 IEEE 厂商全量表（`scripts/fingerprint-setup.sh fetch-oui`，跟 `geoip-setup.sh`"下载一次、之后全部本地"的模式一致），外加本地可编辑的 `config/device-fingerprints.yaml` 做品类/型号特征匹配，替代过去唯一可用的约 19 条内置表。两者缺失时都干净地退回旧的内置表。
+- **TLS 明文捕获（F14）阶段二：pcapng + Decryption Secrets Block 导出。** `internal/pcapfile` 新增 `NgWriter`，`cmd/BeeEye-pcapmerge` 把一份 `.pcap` 和一份 SSLKEYLOGFILE 格式的密钥日志合并成一个 Wireshark 可直接打开的 `.pcapng`（`scripts/tls-decrypt.sh` 现在会自动调用）；用真实抓包+真实密钥验证过，不依赖任何外部密钥文件即可解密出真实的 HTTP/2 请求。
+- **TLS 明文捕获（F14）：OpenSSL 3.0.x 的真实 TLS 1.2 Master Secret 提取**，让默认常开的 uprobe 路径自己也能产出真正的 Decryption Secrets Block，不再只有依赖 SSLKEYLOGFILE 配合的那条路径才行。`bpf/BeeEye_tls.bpf.c` 按照从 OpenSSL 官方源码现算出的（不是猜的）字节偏移量，读取 `SSL`/`SSL_SESSION` 结构体里的 `client_random`/`master_key`，并严格校验 TLS 1.2 Master Secret 的固定长度，绝不上报长度不对的数据。密钥只留在内存（`GET /api/plaintext/keylog` 按需取出——绝不自动落盘，跟 `internal/mitm` 解密请求存储的规矩一致）。用一次真实的、未使用 SSLKEYLOGFILE 的 `curl` 连接验证过：提取出的密钥成功解密出了真实页面内容。
+- **网卡自动识别改为按角色匹配，不再只认精确名字（F16）。** 不同电脑的内核给网卡起的名字五花八门（`wlan0`/`wlp3s0`/`wlp14s0u2`，`eth0`/`enp2s0`/`eno1`），过去配置的名字对不上就直接跳过该条目。`resolveExplicitInterface` 现在会在配置的精确名字不存在时，按该条目的 `role` 去本机真实网卡里找：`wifi_ap` 必须是内核认定的真无线设备（`livesource.IsWireless`，查 `/sys/class/net/<iface>/phy80211`，跟名字无关），`wan_uplink` 必须不是。配置里的精确名字依然始终优先。
+
+### 修复
+
+- **导入离线数据包后，如果打开总览标签页时不是紧挨着导入动作发生，世界地图会一直没有光点**：总览会自动把世界地图的范围切到刚导入的文件（否则它通常很旧的时间戳会被默认的"实时/按最近排序"视图挤没），但这个自动切换以前只在 `imported_at` 落在总览轮询循环恰好运行的那一刻起 90 秒之内才生效——而导入操作是在分析器（另一个页面/端口，F42）里发起的，跟"这一刻正好在看总览"根本不是同一个连续的浏览器动作：导入一个大文件、切换标签页去总览确认一下，很轻松就会超出这 90 秒窗口，之后地图就会一直停留在"实时"范围，没有任何自动恢复机制。现在（`BeeEye-web/src/App.jsx`）把这个基于墙钟时间的窗口换成了用 `localStorage` 持久化的"已经提示过"集合：任何还没见过、且 `imported_at` 是真实时间戳（非零值）的导入，下次轮询就会自动切过去——不设时间上限，并且跨页面刷新依然有效，所以不管导入之后过了多久才打开总览标签页，地图都能正确跳过去。
+
 ## [1.3.1] — 2026-08-22
 
 ### 移除

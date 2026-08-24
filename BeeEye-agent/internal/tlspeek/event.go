@@ -59,6 +59,9 @@ const (
 	DirWrite Direction = 0
 	// DirRead is SSL_read: plaintext the process just received.
 	DirRead Direction = 1
+	// DirKeylog is a TLS 1.2 master-secret record — see masterkey.go's
+	// KeylogLine. Data is not application content for this direction.
+	DirKeylog Direction = 2
 )
 
 func (d Direction) String() string {
@@ -67,6 +70,8 @@ func (d Direction) String() string {
 		return "write"
 	case DirRead:
 		return "read"
+	case DirKeylog:
+		return "keylog"
 	}
 	return "unknown"
 }
