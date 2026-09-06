@@ -4,6 +4,12 @@
 
 [English](CHANGELOG.md)
 
+## [Unreleased]
+
+### 修复
+
+- **离线导入 pcap 时，解析出来的数据包数量可能与 Wireshark 本身显示的不一致。** 「抓包分析」页签的协议/talkers/会话汇总报告背后的 `internal/analyze.Analyze` 之前硬编码调用只认经典 pcap 格式的 `pcapfile.NewReader`，而不是能自动识别 pcapng 的 `pcapfile.Open`。Wireshark 和 dumpcap 默认保存的都是 pcapng 格式，于是上传这类文件时，这个报告会直接拒识别、整份报告归零——而包列表/回放视图（`internal/livefile`，一直用的是 `pcapfile.Open`）却能正确显示，导致两个面板之间、以及和 Wireshark 本身的包数对不上。现已把 `Analyze` 统一改成跟代码库里其他读取器一样走 `pcapfile.Open`，并新增 `TestAnalyzeAcceptsPcapng` 回归测试锁定这个修复。
+
 ## [1.4.0] — 2026-08-23
 
 ### 新增

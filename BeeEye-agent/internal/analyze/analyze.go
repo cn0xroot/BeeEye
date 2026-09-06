@@ -191,22 +191,38 @@ func (c *Collector) Report() *Report {
 	return rep
 }
 
-// Analyze reads a capture file and produces the full report.
+// Analyze reads a capture file and produces the full report. It accepts
+// either classic pcap or pcapng (see pcapfile.Open) — Wireshark and dumpcap
+// both write pcapng by default, so a reader that only understood classic
+// pcap would reject (or silently under-report) the overwhelming majority of
+// files a user actually saves from Wireshark, producing a packet count that
+// disagrees with Wireshark's own for no reason other than this reader's
+// format support.
 func Analyze(r io.Reader, filename string, size int64) (*Report, error) {
-	pr, err := pcapfile.NewReader(r)
+	pr, err := pcapfile.Open(r)
 	if err != nil {
 		return nil, err
 	}
-	hdr := pr.Header()
 
 	c := NewCollector()
-	c.Meta(filename, size, pcapfile.LinkTypeName(hdr.LinkType), hdr.SnapLen)
-	if hdr.LinkType != pcapfile.LinkEthernet {
-		c.Warn(fmt.Sprintf(
-			"link type is %s; this build dissects Ethernet frames, so layers above the link header may not be decoded",
-			pcapfile.LinkTypeName(hdr.LinkType)))
+	// Classic pcap has one link type/snaplen for the whole file, known
+	// up front; pcapng scopes both per interface (see pcapfile.Open's own
+	// doc comment), so there is no single header to read before the first
+	// packet — the warning below is emitted from the first packet actually
+	// seen instead, once its link type is known.
+	if classic, ok := pr.(*pcapfile.Reader); ok {
+		hdr := classic.Header()
+		c.Meta(filename, size, pcapfile.LinkTypeName(hdr.LinkType), hdr.SnapLen)
+		if hdr.LinkType != pcapfile.LinkEthernet {
+			c.Warn(fmt.Sprintf(
+				"link type is %s; this build dissects Ethernet frames, so layers above the link header may not be decoded",
+				pcapfile.LinkTypeName(hdr.LinkType)))
+		}
+	} else {
+		c.Meta(filename, size, "", 0)
 	}
 
+	firstPacket := true
 	dis := dissect.New()
 	for {
 		p, err := pr.Next()
@@ -219,6 +235,21 @@ func Analyze(r io.Reader, filename string, size int64) (*Report, error) {
 			// help nobody.
 			c.Warn(err.Error())
 			break
+		}
+		if firstPacket {
+			firstPacket = false
+			if _, classic := pr.(*pcapfile.Reader); !classic {
+				linkType := p.LinkType
+				if linkType == 0 {
+					linkType = pcapfile.LinkEthernet
+				}
+				c.rep.Summary.LinkType = pcapfile.LinkTypeName(linkType)
+				if linkType != pcapfile.LinkEthernet {
+					c.Warn(fmt.Sprintf(
+						"link type is %s; this build dissects Ethernet frames, so layers above the link header may not be decoded",
+						pcapfile.LinkTypeName(linkType)))
+				}
+			}
 		}
 		c.Add(dis.Packet(live.Packet{
 			Index:   p.Index,

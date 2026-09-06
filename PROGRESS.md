@@ -61,7 +61,7 @@
 
 | 编号 | 功能 | 状态 | 证据 / 缺口 |
 |---|---|---|---|
-| F1 | 设备发现与身份识别 | 🟡 | `internal/identity` 做 OUI + hostname 推断，现已扩展为 `Fingerprint`（DHCP option 55/60、HTTP User-Agent、SSDP `Server:` 头，`internal/livesource/pipeline.go` 的 `seeFingerprint` 打通了从解析层到 `Identify` 的整条链路，DHCP 用自带 `chaddr` 定位设备）。**缺口**：仍是手工建的小规模指纹表（比照现有 19 条 OUI 表的规模），不是 Fingerbank 完整数据库，覆盖率有限 |
+| F1 | 设备发现与身份识别 | 🟡 | `internal/identity` 做 OUI + hostname 推断，现已扩展为 `Fingerprint`（DHCP option 55/60、HTTP User-Agent、SSDP `Server:` 头，`internal/livesource/pipeline.go` 的 `seeFingerprint` 打通了从解析层到 `Identify` 的整条链路，DHCP 用自带 `chaddr` 定位设备）。**2026-08-23 更新**：厂商识别已接入约 5 万条 IEEE MA-L 全量注册表（`internal/identity/oui.go` + `scripts/fingerprint-setup.sh fetch-oui`，可选、一次性下载后全离线），品类/型号提示改为本地可编辑的 `config/device-fingerprints.yaml`（`internal/identity/hints.go`），均为对内置小表的可选覆盖，缺失时干净降级回内置表。**缺口**：仍不是型号级精度（能认出具体是哪款摄像头，不只是厂商）——这正是 Fingerbank 之类服务卖的东西，而 Fingerbank 本身是在线 API，跟本项目"绝不联网单次查询"的原则冲突，默认不接 |
 | F2 | 连接级流量统计 | 🟡 | 内核 `flows` LRU 流表 + 周期快照上报已实现；`internal/store` `connections` 表持久化，实时抓包数据在用 |
 | F3 | TLS 握手信息提取 | ✅ | SNI / ALPN / JA3 已实现（`internal/dissect/app.go`），JA3 稳定性有测试覆盖；分析器对真实流量端到端在用 |
 | F4 | 明文协议解析 | ✅ | MQTT / HTTP / SSDP / mDNS / DNS / DHCP / **CoAP**（RFC 7252 头部+token+Uri-Path/Uri-Query/Content-Format/Observe 等选项逐字段解析，`TestDissectCoAP` + 截断 fuzz 测试覆盖）均已实现 |
@@ -145,6 +145,7 @@
 
 **端到端**
 - **离线 pcap 导入端到端可用**：`POST /api/pcap/upload` 跑 `analyze.Analyze` 返回完整报告（协议/talkers/会话/凭证/提取文件/安全发现/地理）；总览 UI 的「抓包分析」页签上传文件并渲染全部九个报告面板（实测：713 包的抓包解析并展示）。
+  **2026-09-06 修复**：`analyze.Analyze` 之前硬编码调用只认经典 pcap 格式的 `pcapfile.NewReader`，而不是能自动识别 pcapng 的 `pcapfile.Open`——Wireshark/dumpcap 默认保存的正是 pcapng，导致上传这类文件时报告面板的解析包数与 Wireshark 显示的总数不一致（pcapng 文件直接被拒识别，报告面板归零，而同一个文件在包列表视图里其实是完整、正确显示的，因为那条路径`internal/livefile`一直用的是`pcapfile.Open`）。已改为统一走 `pcapfile.Open`，并新增 `TestAnalyzeAcceptsPcapng` 回归测试锁定行为。
 - **抓包持久化到磁盘**：分析器把实时抓包写入 `/tmp/BeeEye/*.pcap`；`TestPcapSinkRoundTrip` 与实测确认——内存环淘汰 791 个包后，取包 #1 详情仍返回 HTTP 200（从磁盘读回重解剖），不再报 "no longer buffered"。
 
 - **两个服务全部端点应答**：`scripts/smoke.sh` **24 项全过，0 失败**，覆盖总览 12 个端点、分析器 11 项（含 SSE 开流、过滤器合法/非法两路、pcap 导出经 `tcpdump` 读回）、以及 F42 进程隔离。
@@ -173,12 +174,12 @@
 
 ## 四、下一步
 
-> 2026-08-19 更新：GeoLite2 接入、威胁情报公开黑名单接入、CoAP 逐字段解析、行为基线建模、按需触发抓包、接口热插拔、总览"模拟/真实"角标、F19 主题二级入口、**eBPF ringbuf 接入 agent 采集源** —— 以上均已完成，详见上表逐条状态与 §0。以下是重新核对后仍然真实存在的下一步。
+> 2026-08-23 更新：F1 全量 IEEE OUI 表+可编辑品类提示、TLS 路径 B（pcapng+DSB 导出）、TLS 路径 A 自身的 OpenSSL 3.0.x masterkey 提取（路径 A 现在也能产出 DSB 了）、F16 按角色的网卡自动识别 —— 以上均已完成，详见上表逐条状态。DNS 隧道特征检测（F33）与 F45 的解密请求列表面板更早前（v1.3.0/v1.1.0）已完成。以下是重新核对后仍然真实存在的下一步。
 
 按优先级：
 
-1. **TLS 明文捕获阶段二/三** —— ~~pcapng+DSB 导出~~ **路径 B 部分已实现**（`internal/pcapfile/ngwriter.go` + `cmd/BeeEye-pcapmerge`，真实 tshark 解密实测通过，见 §二 F14 条目）；剩余 GnuTLS/NSS keylog 提取、Go crypto/tls、路径 A 自身的 masterkey 偏移表（这条才能让路径 A 也产出 DSB）、接入分析器 UI 的「明文」面板。技术路线已从 eCapture 源码调研清楚（版本探测+偏移表 vs GoTLS 走 CO-RE，见 §二 F14 条目），不是空泛参考。阶段一（text 模式）已完成，见 [TLS-DECRYPT.md](TLS-DECRYPT.md)。
-2. ~~F45 手机端可选 MITM 解密~~ **已实现**（`internal/mitm` + 总览 UI「证书与解密」页面），见 §二 F45 条目与 [TLS-DECRYPT.md §5](TLS-DECRYPT.md)。剩余：解密请求列表的可视化面板、透明重定向（当前是显式代理）。
-3. Fingerbank 类型号指纹库接入（F1 缺口）、DNS 隧道特征检测（F33 缺口，NXDOMAIN/DGA 已做）。
-4. 门锁/摄像头出站白名单需要 XDP 程序（F9）、高危事件自动阻断联动（F38，开关已预留默认关闭）、剩余 P2 项（F12 流量分类模型 / F13 移动端推送 / F39 恶意下载特征）均未开始。F32 地图可视化已实现，见 §二。
+1. **TLS 明文捕获收尾**：GnuTLS/NSS 的 keylog（master secret）提取仍未做（目前 GnuTLS 只有明文直读，没有密钥导出）；Go crypto/tls 需要走 CO-RE + TC 五元组关联，是另一套架构，未做；OpenSSL 非 3.0 分支（1.1.1/3.1+）本机没有可实测版本，不编造偏移量；OpenSSL 的 TLS 1.3 masterkey 提取未做（各派生密钥长度取决于协商的摘要算法，需要额外的 cipher→哈希长度表）；分析器 UI 里的实时明文面板与包详情的流式关联仍偏弱。技术路线见 §二 F14 条目。
+2. Fingerbank 型号级指纹库接入（F1 缺口，厂商级已用 IEEE OUI 全量表解决，见上表）。
+3. 门锁/摄像头出站白名单需要 XDP 程序（F9）、高危事件自动阻断联动（F38，开关已预留默认关闭，可以复用同一套 XDP 能力）、剩余 P2 项（F12 流量分类模型 / F13 移动端推送 / F39 恶意下载特征）均未开始。
+4. GeoLite2-City（省市级精度）：需要用户自备免费 MaxMind 账号申请 license key，代码侧 `internal/geoip` 已支持标准 mmdb 格式，卡在需要用户操作这一步，非代码缺口。
 5. （可选，低优先级）排查本机内核 TCX 多程序链只调用第一个 attach 者的行为，判断是这台机器内核的特有限制还是更广泛的现象；如果能解除，分析器也可以在 agent 已经用 eBPF 时改用一种"共享 ringbuf reader"的模式而不必完全放弃 eBPF。目前的收益（分析器继续用久经验证的 AF_PACKET）大于深挖这个内核细节的收益，先如实记录在 §0。

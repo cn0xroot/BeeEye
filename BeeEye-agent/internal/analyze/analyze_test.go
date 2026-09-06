@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"BeeEye/internal/live"
+	"BeeEye/internal/pcapfile"
 )
 
 // writePcap builds an in-memory capture file out of frames, so the tests
@@ -233,6 +234,45 @@ func TestCleanTrafficProducesNoFindings(t *testing.T) {
 	}
 	if len(rep.Credentials) != 0 {
 		t.Errorf("invented credentials from traffic with none: %+v", rep.Credentials)
+	}
+}
+
+// TestAnalyzeAcceptsPcapng guards against the reader silently rejecting (or
+// under-counting) the format Wireshark and dumpcap actually write by
+// default — a bug that showed up as the report's packet count disagreeing
+// with Wireshark's own count for any file a user saved with "File > Save
+// As" instead of piping raw classic pcap in.
+func TestAnalyzeAcceptsPcapng(t *testing.T) {
+	frames := [][]byte{
+		tcpFrame(clientIP, serverIP, 49152, 80, []byte("GET /index.html HTTP/1.1\r\nHost: example.net\r\n\r\n")),
+		tcpFrame(serverIP, clientIP, 80, 49152, []byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html>hi</html>")),
+		tcpFrame(clientIP, serverIP, 49152, 80, []byte("GET /favicon.ico HTTP/1.1\r\nHost: example.net\r\n\r\n")),
+	}
+
+	var buf bytes.Buffer
+	nw, err := pcapfile.NewNgWriter(&buf, pcapfile.LinkEthernet, 65535)
+	if err != nil {
+		t.Fatalf("NewNgWriter: %v", err)
+	}
+	start := time.Unix(1700000000, 0)
+	for i, f := range frames {
+		if err := nw.WritePacket(start.Add(time.Duration(i)*100*time.Millisecond), f, len(f)); err != nil {
+			t.Fatalf("WritePacket %d: %v", i, err)
+		}
+	}
+	if err := nw.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	rep, err := Analyze(bytes.NewReader(buf.Bytes()), "wireshark.pcapng", int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("Analyze rejected a pcapng file: %v", err)
+	}
+	if rep.Summary.Packets != len(frames) {
+		t.Errorf("packets = %d, want %d (Wireshark's own count for this file)", rep.Summary.Packets, len(frames))
+	}
+	if rep.Summary.LinkType != "Ethernet" {
+		t.Errorf("link type = %q, want Ethernet", rep.Summary.LinkType)
 	}
 }
 
