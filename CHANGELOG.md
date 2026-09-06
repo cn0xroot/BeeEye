@@ -4,6 +4,12 @@ All notable changes to BeeEye are documented in this file.
 
 [中文](CHANGELOG.zh-CN.md)
 
+## [Unreleased]
+
+### Fixed
+
+- **Offline pcap import: parsed packet count could disagree with Wireshark's own count.** `internal/analyze.Analyze` (the report behind the Analysis tab's protocol/talkers/sessions summary) hardcoded `pcapfile.NewReader`, which only understands classic pcap, instead of `pcapfile.Open`, which auto-detects pcapng too. Since Wireshark and dumpcap both write pcapng by default, uploading a file saved from either one made this report reject the file outright and come back empty — while the packet-list/replay view (`internal/livefile`, which already used `pcapfile.Open`) kept showing it correctly, so the two panels (and Wireshark itself) disagreed on the count. `Analyze` now goes through `pcapfile.Open` like every other reader in the codebase; a `TestAnalyzeAcceptsPcapng` regression test locks the fix in.
+
 ## [1.4.0] — 2026-08-23
 
 ### Added
