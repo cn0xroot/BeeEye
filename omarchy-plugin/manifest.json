@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "dev.beeeye.live-analyzer",
+  "name": "BeeEye Live",
+  "version": "1.0.0",
+  "author": "BeeEye",
+  "license": "UNLICENSED",
+  "description": "Mirrors BeeEye-gui's live packet analyzer in the Omarchy bar: capture status, packet/byte counters and kernel drops, and a rolling feed of the most recent packets, all polled from the analyzer's local HTTP API (no capture logic duplicated here). Read-only — starting/stopping capture and deep packet inspection stay in the full analyzer, which one click opens in the browser.",
+  "kinds": ["service", "bar-widget", "panel"],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml",
+    "panel": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "BeeEye Live",
+    "description": "Live packet counters and a recent-packets feed pulled from BeeEye-gui, the home-network analyzer's Wireshark-style live capture UI.",
+    "category": "Network",
+    "aliases": ["beeeye", "packet-capture", "live-analyzer", "network-monitor"],
+    "allowMultiple": false,
+    "defaults": {
+      "baseUrl": "http://localhost:8081",
+      "pollInterval": "2 seconds",
+      "packetLimit": 12
+    },
+    "schema": [
+      {
+        "key": "baseUrl",
+        "type": "string",
+        "label": "Analyzer URL",
+        "defaultValue": "http://localhost:8081",
+        "description": "Base URL of the BeeEye-gui live analyzer. Defaults to the local gateway's port 8081 — change it if the Omarchy shell runs on a different machine than the BeeEye gateway (e.g. an SSH-tunnelled or LAN address)."
+      },
+      {
+        "key": "pollInterval",
+        "type": "enum",
+        "label": "Refresh interval",
+        "options": ["1 second", "2 seconds", "5 seconds", "10 seconds"],
+        "defaultValue": "2 seconds",
+        "description": "How often to poll /api/status and /api/packets."
+      },
+      {
+        "key": "packetLimit",
+        "type": "integer",
+        "label": "Recent packets shown",
+        "defaultValue": 12,
+        "min": 5,
+        "max": 30,
+        "description": "How many of the most recent packets to list in the panel."
+      }
+    ]
+  }
+}
