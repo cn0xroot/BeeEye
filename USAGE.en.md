@@ -60,7 +60,7 @@ Stop: `./start.sh stop`　Status: `./start.sh status`　Logs: `./start.sh logs`
 
 | | Minimum | Install |
 |---|---|---|
-| Kernel | Linux ≥ 5.8 with BTF | needs `/sys/kernel/btf/vmlinux`; TCX attach needs ≥ 6.6 |
+| Kernel | Linux with BTF | needs `/sys/kernel/btf/vmlinux` (the only real version gate); TCX attach needs ≥ 6.6, older kernels fall back to legacy tc automatically — verified floor is a patched 5.4.265 kernel, see `INSTALL.md` §11 |
 | Go | 1.25 | https://go.dev/dl/ |
 | clang | ≥ 11 | `apt install clang` |
 | bpftool | any | `apt install linux-tools-common linux-tools-$(uname -r)` |

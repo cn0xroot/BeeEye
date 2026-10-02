@@ -12,7 +12,7 @@
 
 | 组件 | 最低要求 | 说明 |
 |---|---|---|
-| 操作系统 | Linux，内核 ≥ 5.8 且带 BTF | `/sys/kernel/btf/vmlinux` 必须存在；TCX 挂载需 ≥ 6.6 |
+| 操作系统 | Linux 且带 BTF | `/sys/kernel/btf/vmlinux` 必须存在——代码里实际检查的唯一版本门槛。TCX 挂载需 ≥6.6；更老的内核会通过 `cilium/ebpf` 库自动走 legacy tc/cls_bpf 回退拿到同一份程序，已在打了补丁的 5.4.265 内核上验证过(第11节) |
 | 架构 | x86_64 / arm64 | eBPF 目标架构自动推导 |
 | Go | ≥ 1.25 | 编译两个后端二进制 |
 | clang | ≥ 11 | 编译 eBPF 程序 |
@@ -142,7 +142,7 @@ sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel \
 test -r /sys/kernel/btf/vmlinux && echo "BTF 可用" || echo "❌ 内核无 BTF，无法编译 CO-RE eBPF"
 
 # 内核版本
-uname -r    # 需 ≥ 5.8（TCX 需 ≥ 6.6）
+uname -r    # 真正的门槛是上面的 BTF 检查,不是这个版本号;TCX 需 ≥6.6,更老的 BTF 内核会自动走回退(见第11节)
 ```
 
 若 `/sys/kernel/btf/vmlinux` 不存在，说明内核未开启 BTF —— 换一个带 `CONFIG_DEBUG_INFO_BTF=y` 的内核（主流发行版的通用内核默认都带）。
@@ -308,4 +308,46 @@ sudo ./scripts/tls-decrypt.sh capture --app adspower
 - HTTPS 解密：默认挂载 **2 个加密库**（OpenSSL + GnuTLS），实时解密 curl/wget 等明文
 - 加密库检测：44 进程用 OpenSSL、30 进程用 GnuTLS，均 ✓ 可挂载
 
-> 注：内核显示为 `7.0.0`（该主机所用的自定义/较新内核）；项目对内核的实际下限是 5.8（带 BTF），TCX 挂载需 6.6。
+> 注：内核显示为 `7.0.0`（该主机所用的自定义/较新内核）；代码里实际检查的版本门槛只有
+> BTF 是否存在，不是硬编码的内核版本号——第11节用一台真实的 5.4.265 内核证实了这一点。
+
+## 11. 真实下限实测：Tesla 车机 QEMU 安全研究环境（5.4.265 内核）
+
+上面第10节的宿主机内核是 7.0.0，没法验证"项目实际能跑多老的内核"。这一节记录的是另一个
+独立项目——对 Tesla 车机信息娱乐系统做安全研究时搭建的 QEMU 复刻环境——里跑 BeeEye-agent
+的真实结果，专门用来验证内核版本下限，**不是安装指南，也不代表可以或应该把 BeeEye 部署到
+任何真实车辆上**。
+
+### 环境
+
+| 项 | 配置 |
+|---|---|
+| 内核 | 5.4.265（车厂自定义补丁内核，非主线） |
+| BTF | 显式开启 `CONFIG_DEBUG_INFO_BTF=y`，`/sys/kernel/btf/vmlinux` 存在且有内容 |
+| 架构 | x86_64 |
+| 运行方式 | QEMU 虚拟机，root shell，`BeeEye-agent` 编译为普通（非 CUDA）Go 二进制直接运行 |
+
+### 实测结果
+
+`capsource.Open` 调用 `link.AttachTCX`：该内核不支持 TCX（符合预期，< 6.6），
+`cilium/ebpf` 库自动走的 legacy tc/cls_bpf 回退**成功挂载**：
+
+```
+# tc filter show dev eth0 ingress
+filter protocol all pref 1 bpf chain 0 handle 0x1 BeeEye_tc_ingress direct-action
+  not_in_hw id 1 name BeeEye_tc_ingre tag 4c9b9995ec337206
+```
+
+这不是 AF_PACKET 兜底——是真·eBPF 程序成功挂进了内核：`tc filter show` 能看到具体的
+prog id/tag，`connection_count`/`device_count` 持续增长，数据来自内核态聚合，不是用户态
+raw socket 抓的包。
+
+**结论**：代码里唯一的版本门槛是 `/sys/kernel/btf/vmlinux` 是否存在
+（见 `internal/ebpf/loader.go` 的 `Load()`），不是硬编码的内核版本号检查；只要内核把
+`CONFIG_DEBUG_INFO_BTF` 编译进去，5.8 这个数字本身没有特殊意义——之前文档和代码注释里写的
+"≥5.8"只是开发者按经验给的保守估计，被这次实测证伪，已按此修正（见本文件和 README 的
+环境要求表、`internal/ebpf/loader.go`、`internal/capsource/capsource.go` 的注释）。
+
+> 这条证据格外可信的原因：这是在完全独立的另一个项目里、为了别的目的（安全研究，不是为了
+> 测试 BeeEye）搭的环境，事后才拿 BeeEye 去验证——不存在"为了凑一个好看的最低版本号去调
+> 环境"的选择偏差。

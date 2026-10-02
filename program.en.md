@@ -31,7 +31,11 @@ Deploy a traffic-analysis system on an Ubuntu soft-router host to:
 
 **Applicable scenarios**:
 - The user has full administrative control over the home network and its devices
-- The gateway runs Ubuntu (or another modern Linux distro), kernel ≥ 5.8 (BTF/CO-RE/ringbuf support)
+- The gateway runs Ubuntu (or another Linux distro) with a BTF-enabled kernel
+  (`/sys/kernel/btf/vmlinux` exists) — the only gate the code actually checks, not a
+  hardcoded version number; TCX attach needs ≥6.6, older BTF kernels fall back to
+  legacy tc automatically, verified on a patched 5.4.265 kernel in the field (see
+  INSTALL.md §11)
 - Tens to over a hundred devices on the home LAN
 
 **Explicitly out of scope**:
@@ -162,7 +166,7 @@ Both are disabled by default and only take effect when explicitly enabled by the
 ├─────────────────────────────────────────────────┤
 │  Capture: eBPF programs (TC/XDP, attached on LAN)  │
 ├─────────────────────────────────────────────────┤
-│  Ubuntu kernel (≥5.8, BTF required)                │
+│  Linux kernel (BTF required, see text above)       │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -817,7 +821,7 @@ Two implementations sit behind one `live.Source` interface, selected automatical
 
 | Priority | Implementation | Prerequisite | Notes |
 |---|---|---|---|
-| 1 | eBPF ringbuf | kernel ≥5.8 + BTF + CAP_BPF | production path, shares the §3.4 kernel program with the agent |
+| 1 | eBPF ringbuf | kernel with BTF + CAP_BPF (TCX ≥6.6; older BTF kernels fall back to legacy tc, verified down to 5.4.265 in the field, see INSTALL.md §11) | production path, shares the §3.4 kernel program with the agent |
 | 2 | AF_PACKET raw socket | CAP_NET_RAW | current default; no CGO, no libpcap |
 
 **No third-tier fallback since 2026-08-21**: when neither can be opened, `live.Open`/`capsource.Open` return an error outright — nothing is synthesized. **Honest labeling is mandatory**: the source actually in effect must be shown in the status bar (`ebpf`/`af_packet`/`unavailable`). A simulator used to exist here, producing structurally genuine Ethernet frames (they went through the same dissector) as a fallback — but they were still not traffic that really happened on that NIC, and presenting them as a real capture would be worse than showing nothing, which is why that fallback path was removed outright rather than merely kept labeled.

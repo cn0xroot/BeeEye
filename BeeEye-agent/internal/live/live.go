@@ -4,7 +4,12 @@
 // Two sources implement the same Source interface so the GUI never knows
 // which one is attached:
 //
-//  1. eBPF ringbuf  — future: kernel ≥5.8 + BTF, the production path (§3.4)
+//  1. eBPF ringbuf  — future: a BTF-enabled kernel, the production path
+//     (§3.4). Needs ≥6.6 for the modern TCX hook; cilium/ebpf falls back to
+//     legacy tc/cls_bpf automatically on older BTF kernels — see the agent's
+//     own capsource package and INSTALL.md §11 for a real 5.4.265 kernel
+//     this was verified on. There is no actual "≥5.8" floor; that was a
+//     prior conservative guess.
 //  2. AF_PACKET     — now: a raw socket on the chosen interface, no CGO,
 //     no libpcap; needs CAP_NET_RAW
 //

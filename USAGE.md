@@ -57,7 +57,7 @@ cd BeeEye
 
 | | 最低版本 | 安装 |
 |---|---|---|
-| 内核 | Linux ≥ 5.8 且带 BTF | 需 `/sys/kernel/btf/vmlinux`；TCX 挂载需 ≥ 6.6 |
+| 内核 | Linux 且带 BTF | 需 `/sys/kernel/btf/vmlinux`（代码里唯一的版本门槛）；TCX 挂载需 ≥6.6，更老的内核会自动走 legacy tc 回退，实测下限见 `INSTALL.zh-CN.md` 第11节 |
 | Go | 1.25 | https://go.dev/dl/ |
 | clang | ≥ 11 | `apt install clang` |
 | bpftool | 任意 | `apt install linux-tools-common linux-tools-$(uname -r)` |

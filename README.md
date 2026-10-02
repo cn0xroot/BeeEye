@@ -6,6 +6,8 @@
 
 BeeEye runs on the Ubuntu box that already routes your home network. It attaches eBPF programs to the LAN-side interfaces, identifies every device that joins, and watches what those devices talk to — without installing an agent on a single camera, lock or phone, and without decrypting any of *their* traffic (the one deliberate exception is the gateway's own processes, decrypted locally and opt-in for other devices — see [Privacy](#privacy)).
 
+The second half, [the live analyzer](#the-live-analyzer), is a web-native Wireshark: the same packet list / field tree / hex dump a desktop analyzer gives you, served to any browser on the LAN instead of a local GUI, backed by the same eBPF capture pipeline and an optional CUDA-rendered traffic colour-field view (an identical Go implementation on the CPU when no GPU is present — see [Make targets](#make-targets)).
+
 ## Screenshots
 
 The live analyzer — same live capture, switched between its light/dark themes and English/Chinese, all without a reload:
@@ -57,7 +59,7 @@ They share source packages at compile time and nothing at runtime.
 
 | | Minimum | Notes |
 |---|---|---|
-| Kernel | Linux ≥ 5.8 with BTF | `/sys/kernel/btf/vmlinux` must exist. TCX attach needs ≥ 6.6. |
+| Kernel | Linux with BTF | `/sys/kernel/btf/vmlinux` must exist — that's the only version gate the code actually checks. TCX attach (the modern hook) needs ≥ 6.6; older kernels get the same eBPF program via `cilium/ebpf`'s automatic legacy tc/cls_bpf fallback — verified down to a patched 5.4.265 kernel in the field (see `INSTALL.md` §11 for the write-up). |
 | Go | 1.25 | |
 | clang | ≥ 11 | compiles the eBPF program |
 | bpftool | any | generates `vmlinux.h` — `apt install linux-tools-$(uname -r)` |

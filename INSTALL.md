@@ -13,7 +13,7 @@
 
 | Component | Minimum | Notes |
 |---|---|---|
-| OS | Linux, kernel ≥ 5.8 with BTF | `/sys/kernel/btf/vmlinux` must exist; TCX attach needs ≥ 6.6 |
+| OS | Linux with BTF | `/sys/kernel/btf/vmlinux` must exist — the only version gate the code checks. TCX attach needs ≥ 6.6; older kernels get the same program via `cilium/ebpf`'s automatic legacy tc/cls_bpf fallback, verified down to a patched 5.4.265 kernel (§11) |
 | Arch | x86_64 / arm64 | eBPF target arch is derived, not assumed |
 | Go | ≥ 1.25 | builds the two backend binaries |
 | clang | ≥ 11 | compiles the eBPF program |
@@ -142,7 +142,7 @@ Everything runs without it, falling back to the identical CPU renderer:
 # The kernel must ship BTF (the prerequisite for CO-RE eBPF)
 test -r /sys/kernel/btf/vmlinux && echo "BTF present" || echo "no BTF — cannot build CO-RE eBPF"
 
-uname -r    # need ≥ 5.8 (TCX needs ≥ 6.6)
+uname -r    # BTF presence above is the real gate, not this number; TCX needs ≥ 6.6, older BTF kernels fall back automatically (§11)
 ```
 
 If `/sys/kernel/btf/vmlinux` is missing, the kernel was built without BTF — use a
@@ -326,4 +326,55 @@ The host this project is actually developed and tested on, for comparison:
 - Crypto-library detection: 44 processes on OpenSSL, 30 on GnuTLS, both ✓ attachable
 
 > Note: the kernel reads as `7.0.0` (a newer/custom kernel on this host); the
-> project's actual floor is 5.8 with BTF, and TCX attach needs 6.6.
+> only version gate the code actually checks is BTF presence, not a hardcoded
+> kernel number — §11 proves that with a real 5.4.265 kernel.
+
+## 11. Real-world floor: a Tesla infotainment QEMU research environment (5.4.265 kernel)
+
+The host in §10 runs kernel 7.0.0, which can't say anything about how old a
+kernel this project actually tolerates. This section records a real result
+from an unrelated project — a QEMU reconstruction of Tesla's infotainment
+Linux built for security research — running `BeeEye-agent` on it, specifically
+to pin down the kernel floor. **This is not an install guide and does not
+imply BeeEye can or should be deployed on any real vehicle.**
+
+### Environment
+
+| Item | Spec |
+|---|---|
+| Kernel | 5.4.265 (vendor-patched, not mainline) |
+| BTF | `CONFIG_DEBUG_INFO_BTF=y` explicitly enabled; `/sys/kernel/btf/vmlinux` exists and is populated |
+| Arch | x86_64 |
+| How it ran | QEMU VM, root shell, `BeeEye-agent` built as a plain (non-CUDA) Go binary |
+
+### Measured result
+
+`capsource.Open` calls `link.AttachTCX`: this kernel doesn't support TCX (expected,
+< 6.6), and `cilium/ebpf`'s automatic legacy tc/cls_bpf fallback **attached successfully**:
+
+```
+# tc filter show dev eth0 ingress
+filter protocol all pref 1 bpf chain 0 handle 0x1 BeeEye_tc_ingress direct-action
+  not_in_hw id 1 name BeeEye_tc_ingre tag 4c9b9995ec337206
+```
+
+This is not the AF_PACKET fallback — it's a real eBPF program loaded into the
+kernel: `tc filter show` lists its actual prog id/tag, and `connection_count`/
+`device_count` keep climbing from kernel-side aggregation, not a userspace raw
+socket.
+
+**Conclusion**: the only version gate the code checks is whether
+`/sys/kernel/btf/vmlinux` exists (see `Load()` in `internal/ebpf/loader.go`) —
+there is no hardcoded kernel-version check anywhere. As long as a kernel
+compiles in `CONFIG_DEBUG_INFO_BTF`, the number 5.8 carries no special
+significance by itself — the "≥5.8" claim that used to be in this project's
+docs and code comments was a developer's conservative guess, disproven by this
+measurement and corrected accordingly (see this file's and the README's
+requirements table, and the comments in `internal/ebpf/loader.go` /
+`internal/capsource/capsource.go`).
+
+> Why this evidence is unusually trustworthy: this environment was built in a
+> completely separate project, for a different purpose (security research, not
+> testing BeeEye), and BeeEye was pointed at it only afterward — there's no
+> selection bias toward tuning an environment to produce a nice-looking
+> minimum version number.

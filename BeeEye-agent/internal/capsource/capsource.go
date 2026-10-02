@@ -1,10 +1,13 @@
 // Package capsource picks the best real-packet capture source available on
 // this host, trying each in order and falling back to the next when one
-// cannot be used: eBPF ring buffer (lowest per-packet overhead, needs kernel
-// ≥6.6 for TCX plus CAP_BPF/CAP_PERFMON/CAP_NET_ADMIN) → AF_PACKET (works on
-// any kernel with CAP_NET_RAW). If neither is available, Open returns an
-// error rather than a synthetic source — see internal/live's own doc comment
-// for why this project does not ship a simulated fallback.
+// cannot be used: eBPF ring buffer (lowest per-packet overhead, needs a
+// kernel with BTF plus CAP_BPF/CAP_PERFMON/CAP_NET_ADMIN — uses the modern
+// TCX hook on kernel ≥6.6, or cilium/ebpf's automatic legacy tc/cls_bpf
+// fallback on older BTF kernels; verified down to a patched 5.4.265 kernel in
+// the field, see INSTALL.md §11) → AF_PACKET (works on any kernel with
+// CAP_NET_RAW). If neither is available, Open returns an error rather than a
+// synthetic source — see internal/live's own doc comment for why this
+// project does not ship a simulated fallback.
 //
 // This lives above both internal/ebpf and internal/live rather than inside
 // either of them: internal/ebpf already depends on internal/live for the

@@ -44,7 +44,13 @@ type Loader struct {
 
 // ErrNotSupported reports a kernel that cannot host the program. Callers are
 // expected to degrade to another capture source rather than abort (§3.4).
-var ErrNotSupported = errors.New("ebpf: kernel does not support the BeeEye program (needs ≥5.8 with BTF; TCX attach needs ≥6.6)")
+// The only thing actually gating this is BTF presence (see Load below) — not
+// a kernel-version check. TCX attach needs ≥6.6; older kernels with BTF still
+// get the program loaded via cilium/ebpf's automatic legacy tc/cls_bpf
+// fallback in AttachInterface. Verified working on a patched 5.4.265 kernel
+// in the field — see INSTALL.md §11 — so there is no real "≥5.8" floor; that
+// number was a prior guess this measurement disproved.
+var ErrNotSupported = errors.New("ebpf: kernel does not support the BeeEye program (needs BTF at /sys/kernel/btf/vmlinux; TCX attach needs ≥6.6, older kernels fall back to legacy tc automatically)")
 
 // Load verifies and loads the program into the kernel. Nothing is attached to
 // any interface yet — call AttachInterface for each configured NIC (§3.4.5).
