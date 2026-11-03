@@ -10,4 +10,6 @@ type Library struct {
 	PIDs   []int
 }
 
-func FindLibraries() ([]Library, error) { return nil, errors.New("TLS library discovery requires Linux") }
+func FindLibraries() ([]Library, error) {
+	return nil, errors.New("TLS library discovery requires Linux")
+}

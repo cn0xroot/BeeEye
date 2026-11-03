@@ -168,15 +168,7 @@ func (r *Resolver) refreshSockets(force bool) {
 	if !force && time.Since(r.socketsAt) < r.ttl && r.sockets != nil {
 		return
 	}
-	out := map[socketKey]uint64{}
-	for _, f := range []struct{ path, proto string }{
-		{"/proc/net/tcp", "tcp"},
-		{"/proc/net/tcp6", "tcp"},
-		{"/proc/net/udp", "udp"},
-		{"/proc/net/udp6", "udp"},
-	} {
-		parseProcNet(f.path, f.proto, out)
-	}
+	out := platformSockets()
 	r.sockets = out
 	r.socketsAt = time.Now()
 }
@@ -185,7 +177,7 @@ func (r *Resolver) refreshInodes(force bool) {
 	if !force && time.Since(r.inodesAt) < r.ttl && r.inodes != nil {
 		return
 	}
-	r.inodes = scanProcFDs()
+	r.inodes = platformOwners(force)
 	r.inodesAt = time.Now()
 }
 

@@ -94,6 +94,12 @@ build: bpf ## Build both binaries (CPU renderer)
 	cd $(AGENT_DIR) && $(GO) build -o bin/BeeEye-gui ./cmd/BeeEye-gui
 	@ls -la $(BIN)
 
+.PHONY: build-darwin
+build-darwin: frontends ## macOS: build both binaries + UIs (no eBPF; capture via /dev/bpf, needs sudo or ChmodBPF)
+	cd $(AGENT_DIR) && $(GO) build -o bin/BeeEye-agent .
+	cd $(AGENT_DIR) && $(GO) build -o bin/BeeEye-gui ./cmd/BeeEye-gui
+	@echo "built. Run with: sudo IFACE=en0 ./scripts/dev.sh start"
+
 .PHONY: tlspeek
 tlspeek: bpf ## Build the TLS plaintext capture tool (F14; gateway-local only)
 	cd $(AGENT_DIR) && $(GO) build -o bin/BeeEye-tlspeek ./cmd/BeeEye-tlspeek

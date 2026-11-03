@@ -33,3 +33,20 @@ func netInterfaceAddrs() ([]netip.Addr, error) {
 	}
 	return out, nil
 }
+
+// platformSockets reads /proc/net/{tcp,tcp6,udp,udp6}.
+func platformSockets() map[socketKey]uint64 {
+	out := map[socketKey]uint64{}
+	for _, f := range []struct{ path, proto string }{
+		{"/proc/net/tcp", "tcp"},
+		{"/proc/net/tcp6", "tcp"},
+		{"/proc/net/udp", "udp"},
+		{"/proc/net/udp6", "udp"},
+	} {
+		parseProcNet(f.path, f.proto, out)
+	}
+	return out
+}
+
+// platformOwners maps socket inode → owning process via /proc/<pid>/fd.
+func platformOwners(force bool) map[uint64]Process { return scanProcFDs() }

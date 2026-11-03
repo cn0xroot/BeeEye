@@ -3,9 +3,11 @@
 package live
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -166,49 +168,57 @@ func (p *bpfSource) loop(fd int, name string, dlt, blen int) {
 			}
 			return
 		}
-		// struct bpf_hdr: tv_sec int32, tv_usec int32, caplen u32, datalen u32, hdrlen u16
-		for off := 0; off+18 <= n; {
-			sec := int64(*(*int32)(unsafe.Pointer(&buf[off])))
-			usec := int64(*(*int32)(unsafe.Pointer(&buf[off+4])))
-			caplen := int(*(*uint32)(unsafe.Pointer(&buf[off+8])))
-			datalen := int(*(*uint32)(unsafe.Pointer(&buf[off+12])))
-			hdrlen := int(*(*uint16)(unsafe.Pointer(&buf[off+16])))
-			start, end := off+hdrlen, off+hdrlen+caplen
-			if end > n {
-				break
-			}
-			off = (end + 3) &^ 3
-			data := buf[start:end]
-			if dlt == dltNull {
-				if len(data) < 4 {
-					continue
-				}
-				af := *(*uint32)(unsafe.Pointer(&data[0]))
-				et := [2]byte{0x08, 0x00}
-				if af == afInet6D {
-					et = [2]byte{0x86, 0xDD}
-				}
-				eth := make([]byte, 14, 10+len(data))
-				eth[12], eth[13] = et[0], et[1]
-				data = append(eth, data[4:]...)
-				datalen += 10
-			} else {
-				data = append([]byte(nil), data...)
-			}
+		parseBPFBuffer(buf[:n], dlt, name, func(ts time.Time, data []byte, origLen int) {
 			p.captured.Add(1)
 			p.bytes.Add(int64(len(data)))
 			pkt := Packet{
-				Index: p.idx.Add(1), TS: time.Unix(sec, usec*1000), Iface: name,
-				Data: data, CapLen: len(data), OrigLen: datalen,
+				Index: p.idx.Add(1), TS: ts, Iface: name,
+				Data: data, CapLen: len(data), OrigLen: origLen,
 			}
 			select {
 			case p.ch <- pkt:
 			case <-p.done:
-				return
 			default:
 				p.dropped.Add(1)
 			}
+		})
+	}
+}
+
+// parseBPFBuffer 拆解一次 read() 返回的缓冲区:里面是若干条
+// struct bpf_hdr{tv_sec,tv_usec int32; caplen,datalen u32; hdrlen u16} + 数据,
+// 每条按 4 字节对齐。DLT_NULL(回环/utun)的 4 字节地址族头会被替换成
+// 合成的以太网头,让下游解析器无需区分链路类型。
+func parseBPFBuffer(b []byte, dlt int, _ string, emit func(ts time.Time, data []byte, origLen int)) {
+	ne := binary.NativeEndian
+	for off := 0; off+18 <= len(b); {
+		sec := int64(int32(ne.Uint32(b[off:])))
+		usec := int64(int32(ne.Uint32(b[off+4:])))
+		caplen := int(ne.Uint32(b[off+8:]))
+		datalen := int(ne.Uint32(b[off+12:]))
+		hdrlen := int(ne.Uint16(b[off+16:]))
+		start, end := off+hdrlen, off+hdrlen+caplen
+		if hdrlen < 18 || end > len(b) {
+			return // 截断或损坏的记录
 		}
+		off = (end + 3) &^ 3
+		data := b[start:end]
+		if dlt == dltNull {
+			if len(data) < 4 {
+				continue
+			}
+			et := [2]byte{0x08, 0x00}
+			if ne.Uint32(data) == afInet6D {
+				et = [2]byte{0x86, 0xDD}
+			}
+			eth := make([]byte, 14, 10+len(data))
+			eth[12], eth[13] = et[0], et[1]
+			data = append(eth, data[4:]...)
+			datalen += 10
+		} else {
+			data = append([]byte(nil), data...)
+		}
+		emit(time.Unix(sec, usec*1000), data, datalen)
 	}
 }
 
@@ -234,14 +244,74 @@ func (p *bpfSource) Close() error {
 	return nil
 }
 
-// LinkEvent / WatchLinks:macOS 无 netlink,不提供热插拔事件。
+// LinkEvent 与 Linux 版同构。
 type LinkEvent struct {
 	Name    string
 	Removed bool
 }
 
+// linkPollInterval:macOS 没有 netlink,改为轮询网卡列表(开销可忽略)。
+const linkPollInterval = 2 * time.Second
+
+// WatchLinks 轮询 net.Interfaces,网卡出现/变为 up 报告 NEWLINK,消失/变为 down 报告 DELLINK。
+// stop 为 nil 时一直运行(与 Linux 版语义一致)。
 func WatchLinks(stop <-chan struct{}) (<-chan LinkEvent, error) {
-	ch := make(chan LinkEvent)
-	go func() { <-stop; close(ch) }()
-	return ch, nil
+	prev, err := upSet()
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan LinkEvent, 16)
+	go func() {
+		defer close(out)
+		t := time.NewTicker(linkPollInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+			}
+			cur, err := upSet()
+			if err != nil {
+				continue
+			}
+			for _, ev := range diffLinks(prev, cur) {
+				select {
+				case out <- ev:
+				default: // 消费者落后:丢弃事件,下次状态差异仍会再次报告
+				}
+			}
+			prev = cur
+		}
+	}()
+	return out, nil
+}
+
+func upSet() (map[string]bool, error) {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]bool{}
+	for _, i := range ifs {
+		m[i.Name] = i.Flags&net.FlagUp != 0
+	}
+	return m, nil
+}
+
+// diffLinks 比较两次快照。顺序按名字排序,保证输出确定。
+func diffLinks(prev, cur map[string]bool) []LinkEvent {
+	var evs []LinkEvent
+	for n, up := range cur {
+		if up && !prev[n] {
+			evs = append(evs, LinkEvent{Name: n})
+		}
+	}
+	for n, up := range prev {
+		if up && !cur[n] {
+			evs = append(evs, LinkEvent{Name: n, Removed: true})
+		}
+	}
+	sort.Slice(evs, func(i, j int) bool { return evs[i].Name < evs[j].Name })
+	return evs
 }
