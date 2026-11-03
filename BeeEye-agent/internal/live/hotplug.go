@@ -1,3 +1,5 @@
+//go:build linux
+
 // Interface hot-plug auto-discovery (F20): watches RTNETLINK for link
 // add/remove notifications so a USB Wi-Fi dongle plugged in after startup —
 // or one unplugged — is noticed without a restart or a polling loop. This
